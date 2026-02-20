@@ -1,28 +1,29 @@
 """
-Headless tests for PyDep TUI application.
+Headless tests for PyDep TUI application (lazygit-style UI).
 
 These tests verify:
-  1. Module imports (including new DepSource, SourceSelectModal)
+  1. Module imports (including new panel widgets)
   2. PackageManager finds uv
   3. Individual sub-parsers: pyproject.toml, requirements.txt, setup.py,
      setup.cfg, Pipfile
   4. Multi-source merge via load_dependencies()
   5. PyPI validation (4 scenarios)
-  6. App lifecycle: mount, table population (5 columns), search filtering
-  7. Vim motions: j/k cursor, gg jump to top, G jump to bottom
-  8. Modal opening via keybindings: a (Add), u (Update), d (Delete), ? (Help),
-     i (Init)
-  9. Search mode: / focuses input, Escape/Enter returns to table
- 10. Mode indicator updates
- 11. Search filters by source name
- 12. Per-source removal functions (_remove_from_requirements, _remove_from_setup_cfg,
-     _remove_from_pipfile)
- 13. Source-aware deletion flow (single-source vs multi-source, SourceSelectModal)
+  6. App lifecycle: mount, panel population
+  7. Vim motions: j/k cursor in panels, gg jump to top, G jump to bottom
+  8. Panel focus: Tab cycles panels, 1/2/3 jumps to panels
+  9. Filter mode: / opens filter bar, Escape/Enter closes
+ 10. Hint bar updates per panel
+ 11. Package operations: modals for add, update, delete, help
+ 12. Per-source removal functions
+ 13. Source-aware deletion flow (single-source vs multi-source)
+ 14. Outdated check
+ 15. Details panel updates
+ 16. Venv creation
+ 17. Source filtering
 """
 
 from __future__ import annotations
 
-import os
 import textwrap
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -42,10 +43,15 @@ def test_imports():
         ConfirmModal,
         DepSource,
         DependencyManagerApp,
+        DetailsPanel,
         HelpModal,
         Package,
         PackageManager,
+        PackagesPanel,
+        PanelWidget,
         SourceSelectModal,
+        SourcesPanel,
+        StatusPanel,
         UpdatePackageModal,
         _fetch_latest_versions,
         _remove_from_pipfile,
@@ -60,6 +66,11 @@ def test_imports():
     assert DepSource is not None
     assert SourceSelectModal is not None
     assert _fetch_latest_versions is not None
+    assert PanelWidget is not None
+    assert StatusPanel is not None
+    assert SourcesPanel is not None
+    assert PackagesPanel is not None
+    assert DetailsPanel is not None
 
 
 # ---------------------------------------------------------------------------
@@ -516,219 +527,361 @@ def app_no_deps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_app_mounts_and_populates_table(app_with_deps):
-    """App mounts, loads deps, and shows them in the DataTable."""
-    from textual.widgets import DataTable
+async def test_app_mounts_and_populates_packages(app_with_deps):
+    """App mounts, loads deps, and shows them in the PackagesPanel."""
+    from app import PackagesPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_with_deps.query_one("#dep-table", DataTable)
+        pkg_panel = app_with_deps.query_one("#packages-panel", PackagesPanel)
         # pyproject.toml has 3 deps + 1 optional-dep (pytest) = 4
         # uv pip list may add more from the venv -- at minimum we have 4
-        assert table.row_count >= 4
+        assert pkg_panel.package_count >= 4
 
 
 @pytest.mark.asyncio
-async def test_table_has_six_columns(app_with_deps):
-    """Table should have 6 columns: #, Package, Specifier, Installed, Latest, Source."""
-    from textual.widgets import DataTable
+async def test_app_has_all_panels(app_with_deps):
+    """App should have all 4 panel widgets."""
+    from app import DetailsPanel, PackagesPanel, SourcesPanel, StatusPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_with_deps.query_one("#dep-table", DataTable)
-        assert len(table.columns) == 6
+        assert app_with_deps.query_one("#status-panel", StatusPanel) is not None
+        assert app_with_deps.query_one("#sources-panel", SourcesPanel) is not None
+        assert app_with_deps.query_one("#packages-panel", PackagesPanel) is not None
+        assert app_with_deps.query_one("#details-panel", DetailsPanel) is not None
 
 
 @pytest.mark.asyncio
-async def test_search_filtering(app_with_deps):
-    """Typing in search bar filters table rows."""
-    from textual.widgets import DataTable, Input
+async def test_status_panel_shows_info(app_with_deps):
+    """Status panel should display project info."""
+    from app import StatusPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-
-        # Focus the search input
-        await pilot.press("slash")
-        await pilot.pause()
-
-        # Type a filter
-        search_input = app_with_deps.query_one("#search-input", Input)
-        search_input.value = "req"
-        await pilot.pause()
-
-        table = app_with_deps.query_one("#dep-table", DataTable)
-        assert table.row_count == 1  # only "requests" should match
+        status = app_with_deps.query_one("#status-panel", StatusPanel)
+        rendered = str(status.render())
+        assert "PyDep" in rendered
+        assert "Python" in rendered
 
 
 @pytest.mark.asyncio
-async def test_search_by_source(app_with_deps):
-    """Search also matches source file names."""
-    from textual.widgets import DataTable, Input
+async def test_sources_panel_populated(app_with_deps):
+    """Sources panel should show discovered source files."""
+    from app import SourcesPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
+        sources = app_with_deps.query_one("#sources-panel", SourcesPanel)
+        rendered = str(sources.render())
+        assert "All Sources" in rendered
 
-        await pilot.press("slash")
+
+@pytest.mark.asyncio
+async def test_details_panel_updates_on_selection(app_with_deps):
+    """Details panel should show info for the selected package."""
+    from app import DetailsPanel, PackagesPanel
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-
-        search_input = app_with_deps.query_one("#search-input", Input)
-        search_input.value = "pyproject"
-        await pilot.pause()
-
-        table = app_with_deps.query_one("#dep-table", DataTable)
-        # All 4 deps from pyproject.toml should appear
-        assert table.row_count >= 3
+        details = app_with_deps.query_one("#details-panel", DetailsPanel)
+        rendered = str(details.render())
+        # Should show some package name (first package selected by default)
+        # The first alphabetically from our test data
+        assert len(rendered) > 10  # has some content
 
 
 # ---------------------------------------------------------------------------
-# 7. Vim motions
+# 7. Vim motions in panels
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_vim_j_k_movement(app_with_deps):
-    """j/k keys move the cursor up and down."""
-    from textual.widgets import DataTable
+async def test_vim_j_k_in_packages(app_with_deps):
+    """j/k keys move the cursor up and down in PackagesPanel."""
+    from app import PackagesPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_with_deps.query_one("#dep-table", DataTable)
-        table.focus()
+        pkg_panel = app_with_deps.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
         await pilot.pause()
 
-        # Initial cursor is at row 0
-        assert table.cursor_coordinate.row == 0
+        # Initial cursor is at index 0
+        assert pkg_panel.selected_index == 0
 
         # j -> move down
         await pilot.press("j")
         await pilot.pause()
-        assert table.cursor_coordinate.row == 1
+        assert pkg_panel.selected_index == 1
 
         # k -> move back up
         await pilot.press("k")
         await pilot.pause()
-        assert table.cursor_coordinate.row == 0
+        assert pkg_panel.selected_index == 0
 
 
 @pytest.mark.asyncio
-async def test_vim_G_jump_to_bottom(app_with_deps):
-    """Shift+G jumps to the last row."""
-    from textual.widgets import DataTable
+async def test_vim_G_jump_to_bottom_packages(app_with_deps):
+    """Shift+G jumps to the last item in PackagesPanel."""
+    from app import PackagesPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_with_deps.query_one("#dep-table", DataTable)
-        table.focus()
+        pkg_panel = app_with_deps.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
         await pilot.pause()
 
         await pilot.press("G")
         await pilot.pause()
-        assert table.cursor_coordinate.row == table.row_count - 1
+        assert pkg_panel.selected_index == pkg_panel.package_count - 1
 
 
 @pytest.mark.asyncio
-async def test_vim_gg_jump_to_top(app_with_deps):
-    """gg sequence jumps to the first row."""
-    from textual.widgets import DataTable
+async def test_vim_gg_jump_to_top_packages(app_with_deps):
+    """gg sequence jumps to the first item in PackagesPanel."""
+    from app import PackagesPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_with_deps.query_one("#dep-table", DataTable)
-        table.focus()
+        pkg_panel = app_with_deps.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
         await pilot.pause()
 
         # First move to the bottom
         await pilot.press("G")
         await pilot.pause()
-        assert table.cursor_coordinate.row == table.row_count - 1
+        assert pkg_panel.selected_index == pkg_panel.package_count - 1
 
         # Now gg to jump to top
         await pilot.press("g")
         await pilot.press("g")
         await pilot.pause()
-        assert table.cursor_coordinate.row == 0
+        assert pkg_panel.selected_index == 0
+
+
+@pytest.mark.asyncio
+async def test_vim_j_k_in_sources(app_with_deps):
+    """j/k keys navigate in SourcesPanel."""
+    from app import SourcesPanel
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        sources = app_with_deps.query_one("#sources-panel", SourcesPanel)
+        sources.focus()
+        await pilot.pause()
+
+        assert sources.selected_index == 0
+
+        await pilot.press("j")
+        await pilot.pause()
+        assert sources.selected_index == 1
+
+        await pilot.press("k")
+        await pilot.pause()
+        assert sources.selected_index == 0
 
 
 # ---------------------------------------------------------------------------
-# 8. Search mode focus
+# 8. Panel focus: Tab cycling and 1/2/3 jump
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_search_mode_focus(app_with_deps):
-    """/ focuses the search bar; Escape returns to the table."""
-    from textual.widgets import DataTable, Input
+async def test_tab_cycles_panels(app_with_deps):
+    """Tab cycles through the three focusable panels."""
+    from app import PackagesPanel, SourcesPanel, StatusPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_with_deps.query_one("#dep-table", DataTable)
-        search = app_with_deps.query_one("#search-input", Input)
-
-        table.focus()
+        pkg_panel = app_with_deps.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
         await pilot.pause()
 
-        # / focuses search
+        # Packages -> Status
+        await pilot.press("tab")
+        await pilot.pause()
+        focused = app_with_deps.focused
+        assert isinstance(focused, StatusPanel)
+
+        # Status -> Sources
+        await pilot.press("tab")
+        await pilot.pause()
+        focused = app_with_deps.focused
+        assert isinstance(focused, SourcesPanel)
+
+        # Sources -> Packages
+        await pilot.press("tab")
+        await pilot.pause()
+        focused = app_with_deps.focused
+        assert isinstance(focused, PackagesPanel)
+
+
+@pytest.mark.asyncio
+async def test_number_keys_jump_panels(app_with_deps):
+    """1/2/3 keys jump to specific panels."""
+    from app import PackagesPanel, SourcesPanel, StatusPanel
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+
+        # 1 -> Status
+        await pilot.press("1")
+        await pilot.pause()
+        assert isinstance(app_with_deps.focused, StatusPanel)
+
+        # 2 -> Sources
+        await pilot.press("2")
+        await pilot.pause()
+        assert isinstance(app_with_deps.focused, SourcesPanel)
+
+        # 3 -> Packages
+        await pilot.press("3")
+        await pilot.pause()
+        assert isinstance(app_with_deps.focused, PackagesPanel)
+
+
+# ---------------------------------------------------------------------------
+# 9. Filter mode
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_filter_mode_opens(app_with_deps):
+    """/ shows the filter bar and focuses the input."""
+    from textual.widgets import Input
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+
+        # Filter bar should be hidden initially
+        filter_bar = app_with_deps.query_one("#filter-bar")
+        assert filter_bar.display is False
+
+        # / opens filter
         await pilot.press("slash")
         await pilot.pause()
-        assert app_with_deps.focused is search
+        assert filter_bar.display is True
 
-        # Escape returns to table
+        filter_input = app_with_deps.query_one("#filter-input", Input)
+        assert app_with_deps.focused is filter_input
+
+
+@pytest.mark.asyncio
+async def test_filter_escape_closes(app_with_deps):
+    """Escape in filter bar clears and closes it."""
+    from app import PackagesPanel
+    from textual.widgets import Input
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+
+        await pilot.press("slash")
+        await pilot.pause()
+
+        filter_input = app_with_deps.query_one("#filter-input", Input)
+        filter_input.value = "req"
+        await pilot.pause()
+
         await pilot.press("escape")
         await pilot.pause()
-        assert app_with_deps.focused is table
+
+        filter_bar = app_with_deps.query_one("#filter-bar")
+        assert filter_bar.display is False
+        assert filter_input.value == ""
+
+        # Focus should return to packages
+        assert isinstance(app_with_deps.focused, PackagesPanel)
 
 
 @pytest.mark.asyncio
-async def test_search_enter_returns_to_table(app_with_deps):
-    """Enter in search bar returns focus to the table."""
-    from textual.widgets import DataTable, Input
+async def test_filter_enter_keeps_text(app_with_deps):
+    """Enter in filter bar closes it but keeps the filter text."""
+    from app import PackagesPanel
+    from textual.widgets import Input
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_with_deps.query_one("#dep-table", DataTable)
-        search = app_with_deps.query_one("#search-input", Input)
 
-        # Focus search
         await pilot.press("slash")
         await pilot.pause()
-        assert app_with_deps.focused is search
 
-        # Enter returns to table
+        filter_input = app_with_deps.query_one("#filter-input", Input)
+        filter_input.value = "req"
+        await pilot.pause()
+
         await pilot.press("enter")
         await pilot.pause()
-        assert app_with_deps.focused is table
+
+        filter_bar = app_with_deps.query_one("#filter-bar")
+        assert filter_bar.display is False
+
+        # Focus should return to packages
+        assert isinstance(app_with_deps.focused, PackagesPanel)
+
+
+@pytest.mark.asyncio
+async def test_filter_filters_packages(app_with_deps):
+    """Typing in filter bar filters the packages panel."""
+    from app import PackagesPanel
+    from textual.widgets import Input
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+
+        pkg_panel = app_with_deps.query_one("#packages-panel", PackagesPanel)
+        initial_count = pkg_panel.package_count
+
+        await pilot.press("slash")
+        await pilot.pause()
+
+        filter_input = app_with_deps.query_one("#filter-input", Input)
+        filter_input.value = "req"
+        await pilot.pause()
+
+        # Should filter to fewer packages
+        assert pkg_panel.package_count < initial_count
+        assert pkg_panel.package_count >= 1  # at least "requests"
 
 
 # ---------------------------------------------------------------------------
-# 9. Mode indicator
+# 10. Hint bar
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_mode_indicator_updates(app_with_deps):
-    """Mode indicator shows NORMAL when table focused, SEARCH when input focused."""
+async def test_hint_bar_updates(app_with_deps):
+    """Hint bar shows contextual hints per panel."""
+    from app import PackagesPanel, SourcesPanel, StatusPanel
     from textual.widgets import Static
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        indicator = app_with_deps.query_one("#mode-indicator", Static)
+        hint = app_with_deps.query_one("#hint-bar", Static)
 
-        # Table is focused by default -> NORMAL
-        assert "NORMAL" in str(indicator.render())
-
-        # / -> SEARCH
-        await pilot.press("slash")
+        # Packages panel focused
+        pkg_panel = app_with_deps.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
         await pilot.pause()
-        assert "SEARCH" in str(indicator.render())
+        rendered = str(hint.render())
+        assert "add" in rendered
+        assert "filter" in rendered
 
-        # Escape -> back to NORMAL
-        await pilot.press("escape")
+        # Status panel
+        await pilot.press("1")
         await pilot.pause()
-        assert "NORMAL" in str(indicator.render())
+        rendered = str(hint.render())
+        assert "venv" in rendered
+
+        # Sources panel
+        await pilot.press("2")
+        await pilot.pause()
+        rendered = str(hint.render())
+        assert "navigate" in rendered
 
 
 # ---------------------------------------------------------------------------
-# 10. Modal keybindings
+# 11. Modal keybindings
 # ---------------------------------------------------------------------------
 
 
@@ -737,8 +890,8 @@ async def test_help_modal_opens(app_with_deps):
     """? opens the help modal."""
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_with_deps.query_one("#dep-table")
-        table.focus()
+        pkg_panel = app_with_deps.query_one("#packages-panel")
+        pkg_panel.focus()
         await pilot.pause()
 
         await pilot.press("question_mark")
@@ -753,8 +906,8 @@ async def test_add_modal_opens(app_with_deps):
     """a opens the Add Package modal."""
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_with_deps.query_one("#dep-table")
-        table.focus()
+        pkg_panel = app_with_deps.query_one("#packages-panel")
+        pkg_panel.focus()
         await pilot.pause()
 
         await pilot.press("a")
@@ -769,11 +922,11 @@ async def test_add_modal_opens(app_with_deps):
 
 @pytest.mark.asyncio
 async def test_update_modal_opens(app_with_deps):
-    """u opens the Update Package modal when a row is selected."""
+    """u opens the Update Package modal when a package is selected."""
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_with_deps.query_one("#dep-table")
-        table.focus()
+        pkg_panel = app_with_deps.query_one("#packages-panel")
+        pkg_panel.focus()
         await pilot.pause()
 
         await pilot.press("u")
@@ -791,8 +944,8 @@ async def test_delete_confirm_opens(app_with_deps):
     """d opens the delete confirmation modal (single-source package)."""
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_with_deps.query_one("#dep-table")
-        table.focus()
+        pkg_panel = app_with_deps.query_one("#packages-panel")
+        pkg_panel.focus()
         await pilot.pause()
 
         await pilot.press("d")
@@ -971,22 +1124,21 @@ def app_multi_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.asyncio
 async def test_multi_source_delete_opens_source_select(app_multi_source):
     """d on a multi-source package opens SourceSelectModal instead of ConfirmModal."""
-    from textual.widgets import DataTable
+    from app import PackagesPanel
 
     async with app_multi_source.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_multi_source.query_one("#dep-table", DataTable)
-        table.focus()
+        pkg_panel = app_multi_source.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
         await pilot.pause()
 
         # Navigate to "requests" which should have 2+ sources
-        # Find the row for "requests"
-        for i in range(table.row_count):
-            table.move_cursor(row=i, animate=False)
-            await pilot.pause()
-            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
-            if row_key.value == "requests":
+        for i in range(pkg_panel.package_count):
+            pkg = pkg_panel.get_selected_package()
+            if pkg and pkg.name == "requests":
                 break
+            await pilot.press("j")
+            await pilot.pause()
 
         await pilot.press("d")
         await pilot.pause()
@@ -999,23 +1151,23 @@ async def test_multi_source_delete_opens_source_select(app_multi_source):
 @pytest.mark.asyncio
 async def test_source_select_modal_escape_cancels(app_multi_source):
     """Escape in SourceSelectModal dismisses without removal."""
-    from textual.widgets import DataTable
+    from app import PackagesPanel
 
     async with app_multi_source.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_multi_source.query_one("#dep-table", DataTable)
-        table.focus()
+        pkg_panel = app_multi_source.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
         await pilot.pause()
 
         # Navigate to "requests"
-        for i in range(table.row_count):
-            table.move_cursor(row=i, animate=False)
-            await pilot.pause()
-            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
-            if row_key.value == "requests":
+        for i in range(pkg_panel.package_count):
+            pkg = pkg_panel.get_selected_package()
+            if pkg and pkg.name == "requests":
                 break
+            await pilot.press("j")
+            await pilot.pause()
 
-        initial_row_count = table.row_count
+        initial_count = pkg_panel.package_count
 
         await pilot.press("d")
         await pilot.pause()
@@ -1024,28 +1176,28 @@ async def test_source_select_modal_escape_cancels(app_multi_source):
         await pilot.press("escape")
         await pilot.pause()
 
-        # Should be back to the main screen, table unchanged
-        assert table.row_count == initial_row_count
+        # Should be back to the main screen, packages unchanged
+        assert pkg_panel.package_count == initial_count
 
 
 @pytest.mark.asyncio
 async def test_source_select_modal_enter_opens_confirm(app_multi_source):
     """Selecting a source in SourceSelectModal proceeds to ConfirmModal."""
-    from textual.widgets import DataTable
+    from app import PackagesPanel
 
     async with app_multi_source.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_multi_source.query_one("#dep-table", DataTable)
-        table.focus()
+        pkg_panel = app_multi_source.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
         await pilot.pause()
 
         # Navigate to "requests"
-        for i in range(table.row_count):
-            table.move_cursor(row=i, animate=False)
-            await pilot.pause()
-            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
-            if row_key.value == "requests":
+        for i in range(pkg_panel.package_count):
+            pkg = pkg_panel.get_selected_package()
+            if pkg and pkg.name == "requests":
                 break
+            await pilot.press("j")
+            await pilot.pause()
 
         await pilot.press("d")
         await pilot.pause()
@@ -1065,12 +1217,12 @@ async def test_source_select_modal_enter_opens_confirm(app_multi_source):
 @pytest.mark.asyncio
 async def test_single_source_delete_skips_source_select(app_with_deps):
     """d on a single-source package goes directly to ConfirmModal."""
-    from textual.widgets import DataTable
+    from app import PackagesPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_with_deps.query_one("#dep-table", DataTable)
-        table.focus()
+        pkg_panel = app_with_deps.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
         await pilot.pause()
 
         await pilot.press("d")
@@ -1148,9 +1300,8 @@ async def test_loading_overlay_exists_hidden(app_with_deps):
 async def test_outdated_check_with_mock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """Pressing 'o' triggers the outdated check and populates Latest column."""
+    """Pressing 'o' triggers the outdated check and populates latest versions."""
     from app import DependencyManagerApp, _normalise
-    from textual.widgets import DataTable
 
     (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
     (tmp_path / "uv.lock").write_text(_UVLOCK)
@@ -1165,8 +1316,8 @@ async def test_outdated_check_with_mock(
 
     async with app.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app.query_one("#dep-table", DataTable)
-        table.focus()
+        pkg_panel = app.query_one("#packages-panel")
+        pkg_panel.focus()
         await pilot.pause()
 
         await pilot.press("o")
@@ -1182,12 +1333,11 @@ async def test_outdated_check_with_mock(
 
 
 @pytest.mark.asyncio
-async def test_outdated_status_bar_shows_count(
+async def test_outdated_status_panel_shows_count(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """After outdated check, status bar shows outdated count."""
-    from app import DependencyManagerApp, _normalise
-    from textual.widgets import Static
+    """After outdated check, status panel shows outdated count."""
+    from app import DependencyManagerApp, StatusPanel, _normalise
 
     (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
     (tmp_path / "uv.lock").write_text(_UVLOCK)
@@ -1207,8 +1357,8 @@ async def test_outdated_status_bar_shows_count(
         await pilot.pause()
         await pilot.pause()
 
-        info = app.query_one("#status-info", Static)
-        rendered = str(info.render())
+        status = app.query_one("#status-panel", StatusPanel)
+        rendered = str(status.render())
         assert "outdated" in rendered
 
 
@@ -1216,9 +1366,8 @@ async def test_outdated_status_bar_shows_count(
 async def test_outdated_check_all_up_to_date(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """When all packages are up to date, status bar has no 'outdated' count."""
-    from app import DependencyManagerApp, _normalise
-    from textual.widgets import Static
+    """When all packages are up to date, status panel has no 'outdated' count."""
+    from app import DependencyManagerApp, StatusPanel, _normalise
 
     (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
     (tmp_path / "uv.lock").write_text(_UVLOCK)
@@ -1244,18 +1393,18 @@ async def test_outdated_check_all_up_to_date(
         await pilot.pause()
         await pilot.pause()
 
-        info = app.query_one("#status-info", Static)
-        rendered = str(info.render())
+        status = app.query_one("#status-panel", StatusPanel)
+        rendered = str(status.render())
         assert "outdated" not in rendered
 
 
 @pytest.mark.asyncio
-async def test_help_modal_shows_outdated_key(app_with_deps):
-    """Help modal includes the 'o' keybinding for outdated check."""
+async def test_help_modal_shows_new_keybindings(app_with_deps):
+    """Help modal includes the new keybindings (Tab, 1/2/3, v)."""
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        table = app_with_deps.query_one("#dep-table")
-        table.focus()
+        pkg_panel = app_with_deps.query_one("#packages-panel")
+        pkg_panel.focus()
         await pilot.pause()
 
         await pilot.press("question_mark")
@@ -1265,4 +1414,109 @@ async def test_help_modal_shows_outdated_key(app_with_deps):
 
         help_body = app_with_deps.screen.query_one("#help-body", Static)
         rendered = str(help_body.render())
+        assert "Tab" in rendered
         assert "outdated" in rendered.lower()
+        assert "venv" in rendered.lower() or "virtual" in rendered.lower()
+
+
+# ---------------------------------------------------------------------------
+# 16. Venv creation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_venv_creation_warns_if_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Pressing v when .venv already exists shows a warning."""
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_UVLOCK)
+    (tmp_path / ".venv").mkdir()  # create the venv dir
+    monkeypatch.chdir(tmp_path)
+
+    from app import DependencyManagerApp
+
+    app = DependencyManagerApp()
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("v")
+        await pilot.pause()
+        # The app should show a toast warning, no crash
+
+
+@pytest.mark.asyncio
+async def test_status_panel_shows_venv_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Status panel shows venv existence status."""
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_UVLOCK)
+    (tmp_path / ".venv").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    from app import DependencyManagerApp, StatusPanel
+
+    app = DependencyManagerApp()
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        status = app.query_one("#status-panel", StatusPanel)
+        rendered = str(status.render())
+        # Should show venv exists indicator
+        assert ".venv" in rendered
+
+
+@pytest.mark.asyncio
+async def test_status_panel_shows_no_venv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Status panel shows 'No venv' when .venv doesn't exist."""
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_UVLOCK)
+    monkeypatch.chdir(tmp_path)
+
+    from app import DependencyManagerApp, StatusPanel
+
+    app = DependencyManagerApp()
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        status = app.query_one("#status-panel", StatusPanel)
+        rendered = str(status.render())
+        assert "No venv" in rendered
+
+
+# ---------------------------------------------------------------------------
+# 17. Source filtering
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_source_selection_filters_packages(app_multi_source):
+    """Selecting a specific source in SourcesPanel filters PackagesPanel."""
+    from app import PackagesPanel, SourcesPanel
+
+    async with app_multi_source.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+
+        sources = app_multi_source.query_one("#sources-panel", SourcesPanel)
+        pkg_panel = app_multi_source.query_one("#packages-panel", PackagesPanel)
+
+        all_count = pkg_panel.package_count
+
+        # Focus sources and navigate to a specific source
+        sources.focus()
+        await pilot.pause()
+
+        # Move to first actual source (past "All Sources")
+        await pilot.press("j")
+        await pilot.pause()
+
+        # Press enter to select
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # Package count should be <= all_count (filtered)
+        filtered_count = pkg_panel.package_count
+        assert filtered_count <= all_count

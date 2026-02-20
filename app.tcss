@@ -1,12 +1,12 @@
 /* =============================================================================
    PyDep - Python Dependency Manager TUI
-   Theme: Tokyo Night
+   Theme: Tokyo Night  |  Layout: Lazygit-style multi-panel
    Palette:
      bg-dark:      #1a1b26    bg-surface:   #24283b    bg-highlight: #292e42
      fg-primary:   #c0caf5    fg-secondary: #565f89    fg-dark:      #414868
      accent-blue:  #7aa2f7    accent-green: #9ece6a    accent-red:   #f7768e
      accent-yellow:#e0af68    accent-purple:#bb9af7    accent-cyan:  #7dcfff
-     border:       #3b4261
+     border:       #3b4261    odd-row:      #1e2030
    ============================================================================= */
 
 /* --- Screen & Global --- */
@@ -17,109 +17,133 @@ Screen {
     layers: default overlay;
 }
 
-/* --- Header --- */
+/* --- Main Layout: two-column split --- */
 
-Header {
-    background: #24283b;
-    color: #7aa2f7;
-    dock: top;
-    height: 1;
-}
-
-/* --- Footer --- */
-
-Footer {
-    background: #24283b;
-    color: #565f89;
-}
-
-FooterKey {
-    background: #24283b;
-    color: #7aa2f7;
-}
-
-FooterKey:hover {
-    background: #292e42;
-    color: #c0caf5;
-}
-
-/* --- Search Bar --- */
-
-#search-bar {
-    dock: top;
-    margin: 1 2 0 2;
-    height: 3;
-}
-
-#search-input {
+#main-layout {
     width: 100%;
-    background: #24283b;
-    color: #c0caf5;
-    border: tall #3b4261;
-}
-
-#search-input:focus {
-    border: tall #7aa2f7;
-}
-
-#search-input > .input--placeholder {
-    color: #565f89;
-}
-
-/* --- Data Table --- */
-
-#dep-table {
-    margin: 1 2;
     height: 1fr;
+}
+
+#left-column {
+    width: 35%;
+    min-width: 30;
+    height: 100%;
+}
+
+/* --- Panel Base Styles --- */
+
+PanelWidget, StatusPanel, SourcesPanel, PackagesPanel, DetailsPanel {
     background: #1a1b26;
+    color: #c0caf5;
+    border: round #3b4261;
+    padding: 0 1;
+    overflow-y: auto;
     scrollbar-color: #3b4261;
     scrollbar-color-hover: #565f89;
     scrollbar-color-active: #7aa2f7;
     scrollbar-background: #1a1b26;
 }
 
-DataTable > .datatable--header {
-    background: #24283b;
-    color: #7aa2f7;
-    text-style: bold;
+.panel-active {
+    border: round #7aa2f7;
 }
 
-DataTable > .datatable--cursor {
-    background: #292e42;
-    color: #c0caf5;
+.panel-inactive {
+    border: round #3b4261;
 }
 
-DataTable > .datatable--hover {
-    background: #292e42 40%;
+/* --- Status Panel --- */
+
+#status-panel {
+    height: auto;
+    min-height: 7;
+    max-height: 10;
 }
 
-DataTable > .datatable--even-row {
-    background: #1a1b26;
+/* --- Sources Panel --- */
+
+#sources-panel {
+    height: auto;
+    min-height: 4;
+    max-height: 12;
 }
 
-DataTable > .datatable--odd-row {
-    background: #1e2030;
+/* --- Packages Panel --- */
+
+#packages-panel {
+    height: 1fr;
+    min-height: 6;
 }
 
-/* --- Status Bar --- */
+/* --- Details Panel --- */
 
-#status-bar {
+#details-panel {
+    width: 65%;
+    height: 100%;
+    border: round #3b4261;
+}
+
+/* --- Bottom Bar (contextual hints) --- */
+
+#bottom-bar {
     dock: bottom;
     height: 1;
-    margin: 0 2;
+    background: #24283b;
+    padding: 0 1;
+}
+
+#hint-bar {
+    width: 100%;
+    color: #565f89;
+    height: 1;
+}
+
+/* --- Filter Bar --- */
+
+#filter-bar {
+    dock: bottom;
+    height: 3;
+    padding: 0 1;
     background: #1a1b26;
 }
 
-#mode-indicator {
-    width: 16;
-    color: #7aa2f7;
-    text-style: bold;
+#filter-input {
+    width: 100%;
+    background: #24283b;
+    color: #c0caf5;
+    border: tall #3b4261;
 }
 
-#status-info {
-    width: 1fr;
+#filter-input:focus {
+    border: tall #7aa2f7;
+}
+
+#filter-input > .input--placeholder {
     color: #565f89;
-    text-align: right;
+}
+
+/* --- Loading overlay --- */
+
+#loading-overlay {
+    width: 100%;
+    height: 100%;
+    align: center middle;
+    background: #1a1b26 60%;
+    layer: overlay;
+    display: none;
+}
+
+LoadingIndicator {
+    color: #7aa2f7;
+    background: transparent;
+}
+
+#loading-message {
+    width: auto;
+    color: #7aa2f7;
+    text-align: center;
+    margin: 1 0 0 0;
+    background: transparent;
 }
 
 /* --- Modal Screens --- */
@@ -267,30 +291,6 @@ ModalScreen {
     border: tall #7aa2f7;
 }
 
-/* --- Loading overlay --- */
-
-#loading-overlay {
-    width: 100%;
-    height: 100%;
-    align: center middle;
-    background: #1a1b26 60%;
-    layer: overlay;
-    display: none;
-}
-
-LoadingIndicator {
-    color: #7aa2f7;
-    background: transparent;
-}
-
-#loading-message {
-    width: auto;
-    color: #7aa2f7;
-    text-align: center;
-    margin: 1 0 0 0;
-    background: transparent;
-}
-
 /* --- Toast / Notification styling --- */
 
 Toast {
@@ -311,9 +311,9 @@ Toast {
 /* --- Help Modal --- */
 
 #help-dialog {
-    width: 56;
+    width: 60;
     height: auto;
-    max-height: 28;
+    max-height: 32;
     background: #24283b;
     border: thick #7aa2f7 60%;
     padding: 1 2;

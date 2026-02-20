@@ -708,10 +708,11 @@ class DependencyManagerApp(App):
 
     async def on_mount(self) -> None:
         table = self.query_one("#dep-table", DataTable)
-        table.add_column("#", width=5, key="idx")
-        table.add_column("Package", width=28, key="name")
-        table.add_column("Specifier", width=16, key="specifier")
-        table.add_column("Locked Version", width=16, key="locked")
+        table.add_column("#", width=4, key="idx")
+        table.add_column("Package", width=22, key="name")
+        table.add_column("Specifier", width=30, key="specifier")
+        table.add_column("Installed", width=14, key="installed")
+        table.add_column("Source", width=30, key="source")
         table.focus()
 
         toml_path = Path.cwd() / "pyproject.toml"
@@ -805,6 +806,25 @@ class DependencyManagerApp(App):
     def on_descendant_blur(self, _event: events.DescendantBlur) -> None:
         self.watch_focused()
 
+    # -- source color map -------------------------------------------------------
+
+    _SOURCE_COLORS: ClassVar[dict[str, str]] = {
+        "pyproject.toml": "#bb9af7",  # purple
+        "requirements": "#7dcfff",  # cyan  (prefix match)
+        "setup.py": "#e0af68",  # yellow
+        "setup.cfg": "#e0af68",  # yellow
+        "Pipfile": "#9ece6a",  # green
+        "venv": "#565f89",  # dim
+    }
+
+    @staticmethod
+    def _source_color(label: str) -> str:
+        """Return the Tokyo Night color for a given source label."""
+        for prefix, color in DependencyManagerApp._SOURCE_COLORS.items():
+            if label.startswith(prefix) or label == prefix:
+                return color
+        return "#c0caf5"  # default fg
+
     # -- data loading ---------------------------------------------------------
 
     @work(exclusive=True, group="refresh")
@@ -833,18 +853,44 @@ class DependencyManagerApp(App):
         table.clear()
         query = self._filter.lower()
         for idx, pkg in enumerate(self._packages, start=1):
-            if query and query not in pkg.name.lower():
-                continue
-            locked_text = Text(
-                pkg.locked_version or "-",
-                style="#9ece6a" if pkg.locked_version else "#565f89",
+            # Filter by name OR by source file name
+            if query:
+                name_match = query in pkg.name.lower()
+                source_match = any(query in s.file.lower() for s in pkg.sources)
+                if not name_match and not source_match:
+                    continue
+
+            # Installed version (green if present, dim if not)
+            installed_text = Text(
+                pkg.installed_version or "-",
+                style="#9ece6a" if pkg.installed_version else "#565f89",
             )
-            spec_text = Text(pkg.specifier, style="#bb9af7")
+
+            # Specifier: per-source, e.g. ">=2.31 (pyproject.toml), * (venv)"
+            spec_text = Text()
+            for i, src in enumerate(pkg.sources):
+                if i > 0:
+                    spec_text.append(", ", style="#565f89")
+                spec_text.append(src.specifier, style="#bb9af7")
+                spec_text.append(f" ({src.file})", style="#565f89")
+
+            # Source column: comma-joined file names, each color-coded
+            seen_files: list[str] = []
+            for src in pkg.sources:
+                if src.file not in seen_files:
+                    seen_files.append(src.file)
+            source_text = Text()
+            for i, file in enumerate(seen_files):
+                if i > 0:
+                    source_text.append(", ", style="#565f89")
+                source_text.append(file, style=self._source_color(file))
+
             table.add_row(
                 str(idx),
                 pkg.name,
                 spec_text,
-                locked_text,
+                installed_text,
+                source_text,
                 key=pkg.name,
             )
 

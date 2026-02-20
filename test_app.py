@@ -47,6 +47,7 @@ def test_imports():
         PackageManager,
         SourceSelectModal,
         UpdatePackageModal,
+        _fetch_latest_versions,
         _remove_from_pipfile,
         _remove_from_requirements,
         _remove_from_setup_cfg,
@@ -58,6 +59,7 @@ def test_imports():
     assert PackageManager is not None
     assert DepSource is not None
     assert SourceSelectModal is not None
+    assert _fetch_latest_versions is not None
 
 
 # ---------------------------------------------------------------------------
@@ -527,14 +529,14 @@ async def test_app_mounts_and_populates_table(app_with_deps):
 
 
 @pytest.mark.asyncio
-async def test_table_has_five_columns(app_with_deps):
-    """Table should have 5 columns: #, Package, Specifier, Installed, Source."""
+async def test_table_has_six_columns(app_with_deps):
+    """Table should have 6 columns: #, Package, Specifier, Installed, Latest, Source."""
     from textual.widgets import DataTable
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
         table = app_with_deps.query_one("#dep-table", DataTable)
-        assert len(table.columns) == 5
+        assert len(table.columns) == 6
 
 
 @pytest.mark.asyncio
@@ -1082,3 +1084,185 @@ async def test_single_source_delete_skips_source_select(app_with_deps):
         message = app_with_deps.screen.query_one("#confirm-message")
         rendered = str(message.render())
         assert "pyproject.toml" in rendered or "Remove" in rendered
+
+
+# ---------------------------------------------------------------------------
+# 14. Outdated check: _fetch_latest_versions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_latest_versions():
+    """Batch query should return latest versions for known packages."""
+    from app import _fetch_latest_versions
+
+    versions, failures = await _fetch_latest_versions(["requests", "httpx"])
+    assert failures == 0
+    assert "requests" in versions
+    assert "httpx" in versions
+    # Versions should be non-empty strings
+    assert len(versions["requests"]) > 0
+    assert len(versions["httpx"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_latest_versions_nonexistent():
+    """Non-existent packages are counted as failures, not errors."""
+    from app import _fetch_latest_versions
+
+    versions, failures = await _fetch_latest_versions(
+        ["this-package-does-not-exist-xyz-12345"]
+    )
+    assert failures == 1
+    assert len(versions) == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_latest_versions_empty():
+    """Empty input returns empty results."""
+    from app import _fetch_latest_versions
+
+    versions, failures = await _fetch_latest_versions([])
+    assert versions == {}
+    assert failures == 0
+
+
+# ---------------------------------------------------------------------------
+# 15. Outdated check: UI integration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_loading_overlay_exists_hidden(app_with_deps):
+    """Loading overlay widget exists but is hidden by default."""
+    from textual.containers import Container
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        overlay = app_with_deps.query_one("#loading-overlay", Container)
+        assert overlay is not None
+        assert overlay.display is False
+
+
+@pytest.mark.asyncio
+async def test_outdated_check_with_mock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Pressing 'o' triggers the outdated check and populates Latest column."""
+    from app import DependencyManagerApp, _normalise
+    from textual.widgets import DataTable
+
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_UVLOCK)
+    monkeypatch.chdir(tmp_path)
+
+    app = DependencyManagerApp()
+
+    async def mock_fetch(packages):
+        return {_normalise(n): "99.0.0" for n in packages}, 0
+
+    monkeypatch.setattr("app._fetch_latest_versions", mock_fetch)
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        table = app.query_one("#dep-table", DataTable)
+        table.focus()
+        await pilot.pause()
+
+        await pilot.press("o")
+        await pilot.pause()
+        await pilot.pause()  # extra pause for async worker
+
+        # After outdated check, _latest_versions should be populated
+        assert len(app._latest_versions) > 0
+
+        # All packages should have "99.0.0" as latest
+        for key in app._latest_versions:
+            assert app._latest_versions[key] == "99.0.0"
+
+
+@pytest.mark.asyncio
+async def test_outdated_status_bar_shows_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """After outdated check, status bar shows outdated count."""
+    from app import DependencyManagerApp, _normalise
+    from textual.widgets import Static
+
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_UVLOCK)
+    monkeypatch.chdir(tmp_path)
+
+    app = DependencyManagerApp()
+
+    # Mock: all packages have a newer version available
+    async def mock_fetch(packages):
+        return {_normalise(n): "99.0.0" for n in packages}, 0
+
+    monkeypatch.setattr("app._fetch_latest_versions", mock_fetch)
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("o")
+        await pilot.pause()
+        await pilot.pause()
+
+        info = app.query_one("#status-info", Static)
+        rendered = str(info.render())
+        assert "outdated" in rendered
+
+
+@pytest.mark.asyncio
+async def test_outdated_check_all_up_to_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """When all packages are up to date, status bar has no 'outdated' count."""
+    from app import DependencyManagerApp, _normalise
+    from textual.widgets import Static
+
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_UVLOCK)
+    monkeypatch.chdir(tmp_path)
+
+    app = DependencyManagerApp()
+
+    # Mock: versions match what's in uv.lock
+    async def mock_fetch(packages):
+        lock_versions = {"requests": "2.32.3", "httpx": "0.28.1", "click": "8.1.7"}
+        result = {}
+        for name in packages:
+            key = _normalise(name)
+            if key in lock_versions:
+                result[key] = lock_versions[key]
+        return result, 0
+
+    monkeypatch.setattr("app._fetch_latest_versions", mock_fetch)
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("o")
+        await pilot.pause()
+        await pilot.pause()
+
+        info = app.query_one("#status-info", Static)
+        rendered = str(info.render())
+        assert "outdated" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_help_modal_shows_outdated_key(app_with_deps):
+    """Help modal includes the 'o' keybinding for outdated check."""
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        table = app_with_deps.query_one("#dep-table")
+        table.focus()
+        await pilot.pause()
+
+        await pilot.press("question_mark")
+        await pilot.pause()
+
+        from textual.widgets import Static
+
+        help_body = app_with_deps.screen.query_one("#help-body", Static)
+        rendered = str(help_body.render())
+        assert "outdated" in rendered.lower()

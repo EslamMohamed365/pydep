@@ -14,6 +14,7 @@
 Screen {
     background: #1a1b26;
     color: #c0caf5;
+    layers: default overlay;
 }
 
 /* --- Header --- */
@@ -274,10 +275,19 @@ ModalScreen {
     align: center middle;
     background: #1a1b26 60%;
     layer: overlay;
+    display: none;
 }
 
 LoadingIndicator {
     color: #7aa2f7;
+    background: transparent;
+}
+
+#loading-message {
+    width: auto;
+    color: #7aa2f7;
+    text-align: center;
+    margin: 1 0 0 0;
     background: transparent;
 }
 

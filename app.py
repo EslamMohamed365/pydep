@@ -43,7 +43,7 @@ from rich.text import Text
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
@@ -51,6 +51,7 @@ from textual.widgets import (
     Footer,
     Header,
     Input,
+    LoadingIndicator,
     Static,
 )
 
@@ -565,6 +566,42 @@ async def validate_pypi(
     return True, None, latest
 
 
+async def _fetch_latest_versions(
+    packages: list[str],
+) -> tuple[dict[str, str], int]:
+    """Batch-query PyPI for the latest version of each package.
+
+    Queries up to 10 packages concurrently to avoid overwhelming PyPI.
+
+    Returns ``(latest_versions_map, failure_count)`` where the map is
+    ``{normalised_name: latest_version}``.
+    """
+    sem = asyncio.Semaphore(10)
+    results: dict[str, str] = {}
+    failures = 0
+
+    async def _fetch_one(client: httpx.AsyncClient, name: str) -> None:
+        nonlocal failures
+        async with sem:
+            try:
+                resp = await client.get(f"https://pypi.org/pypi/{name}/json")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    latest = data.get("info", {}).get("version", "")
+                    if latest:
+                        results[_normalise(name)] = latest
+                else:
+                    failures += 1
+            except Exception:
+                failures += 1
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        tasks = [_fetch_one(client, name) for name in packages]
+        await asyncio.gather(*tasks)
+
+    return results, failures
+
+
 # =============================================================================
 # Modal Screens
 # =============================================================================
@@ -710,6 +747,7 @@ _HELP_TEXT = """\
   [#9ece6a]a[/]               Add package
   [#9ece6a]u[/]               Update selected package
   [#9ece6a]d[/]               Delete selected package
+  [#9ece6a]o[/]               Check outdated packages
   [#9ece6a]r[/]               Refresh list
   [#9ece6a]i[/]               Init project  (uv init)
   [#9ece6a]?[/]               Toggle this help
@@ -838,6 +876,7 @@ class DependencyManagerApp(App):
         Binding("a", "add_package", "Add", priority=True),
         Binding("u", "update_package", "Update", priority=True),
         Binding("d", "delete_package", "Delete", priority=True),
+        Binding("o", "check_outdated", "Outdated", priority=True),
         Binding("r", "refresh", "Refresh", priority=True),
         Binding("slash", "focus_search", "/Search", priority=True),
         Binding("i", "init_project", "Init", priority=True),
@@ -850,6 +889,7 @@ class DependencyManagerApp(App):
         self.pkg_mgr = PackageManager()
         self._packages: list[Package] = []
         self._filter: str = ""
+        self._latest_versions: dict[str, str] = {}
         # gg sequence state
         self._pending_g: bool = False
         self._pending_g_time: float = 0.0
@@ -867,6 +907,9 @@ class DependencyManagerApp(App):
             yield Static("NORMAL", id="mode-indicator")
             yield Static("", id="status-info")
         yield Footer()
+        with Container(id="loading-overlay"):
+            yield LoadingIndicator()
+            yield Static("Loading...", id="loading-message")
 
     async def on_mount(self) -> None:
         table = self.query_one("#dep-table", DataTable)
@@ -874,6 +917,7 @@ class DependencyManagerApp(App):
         table.add_column("Package", width=22, key="name")
         table.add_column("Specifier", width=30, key="specifier")
         table.add_column("Installed", width=14, key="installed")
+        table.add_column("Latest", width=14, key="latest")
         table.add_column("Source", width=30, key="source")
         table.focus()
 
@@ -992,15 +1036,26 @@ class DependencyManagerApp(App):
 
     # -- data loading ---------------------------------------------------------
 
+    def _show_loading(self, message: str = "Loading...") -> None:
+        """Show the loading overlay with a message."""
+        overlay = self.query_one("#loading-overlay", Container)
+        overlay.query_one("#loading-message", Static).update(message)
+        overlay.display = True
+
+    def _hide_loading(self) -> None:
+        """Hide the loading overlay."""
+        self.query_one("#loading-overlay", Container).display = False
+
     @work(exclusive=True, group="refresh")
     async def _refresh_data(self) -> None:
+        self._show_loading("Scanning dependency sources...")
         self._set_info("Scanning sources...")
         try:
             # Fetch installed packages asynchronously
             installed = await _parse_installed(self.pkg_mgr._uv)
             self._packages = load_dependencies(installed=installed)
         except Exception as exc:
-            self.notify(f"Failed to load: {exc}", severity="error")
+            self.notify(f"Failed to load dependencies: {exc}", severity="error")
             self._packages = []
         self._repopulate_table()
         # Count distinct source files
@@ -1009,9 +1064,24 @@ class DependencyManagerApp(App):
             for s in pkg.sources:
                 all_sources.add(s.file)
         n_sources = len(all_sources)
-        self._set_info(
-            f"{len(self._packages)} packages  |  {n_sources} source{'s' if n_sources != 1 else ''}"
-        )
+        info_parts = [
+            f"{len(self._packages)} packages",
+            f"{n_sources} source{'s' if n_sources != 1 else ''}",
+        ]
+        # Include outdated count if we have version data
+        if self._latest_versions:
+            outdated = sum(
+                1
+                for pkg in self._packages
+                if pkg.installed_version
+                and self._latest_versions.get(_normalise(pkg.name), "")
+                and pkg.installed_version
+                != self._latest_versions.get(_normalise(pkg.name), "")
+            )
+            if outdated:
+                info_parts.append(f"{outdated} outdated")
+        self._set_info("  |  ".join(info_parts))
+        self._hide_loading()
 
     def _repopulate_table(self) -> None:
         table = self.query_one("#dep-table", DataTable)
@@ -1025,11 +1095,25 @@ class DependencyManagerApp(App):
                 if not name_match and not source_match:
                     continue
 
-            # Installed version (green if present, dim if not)
-            installed_text = Text(
-                pkg.installed_version or "-",
-                style="#9ece6a" if pkg.installed_version else "#565f89",
-            )
+            # Installed version — color depends on outdated status
+            norm_name = _normalise(pkg.name)
+            latest = self._latest_versions.get(norm_name, "")
+            if pkg.installed_version and latest:
+                if pkg.installed_version == latest:
+                    inst_style = "#9ece6a"  # green — up to date
+                else:
+                    inst_style = "#e0af68"  # yellow — outdated
+            elif pkg.installed_version:
+                inst_style = "#9ece6a"  # green — installed, no check yet
+            else:
+                inst_style = "#565f89"  # dim — not installed
+            installed_text = Text(pkg.installed_version or "-", style=inst_style)
+
+            # Latest version column
+            if latest:
+                latest_text = Text(latest, style="#7dcfff")
+            else:
+                latest_text = Text("-", style="#565f89")
 
             # Specifier: per-source, e.g. ">=2.31 (pyproject.toml), * (venv)"
             spec_text = Text()
@@ -1055,6 +1139,7 @@ class DependencyManagerApp(App):
                 pkg.name,
                 spec_text,
                 installed_text,
+                latest_text,
                 source_text,
                 key=pkg.name,
             )
@@ -1078,6 +1163,61 @@ class DependencyManagerApp(App):
 
     def action_refresh(self) -> None:
         self._refresh_data()
+
+    def action_check_outdated(self) -> None:
+        self._check_all_outdated()
+
+    @work(exclusive=True, group="outdated")
+    async def _check_all_outdated(self) -> None:
+        """Query PyPI for the latest version of every loaded package."""
+        if not self._packages:
+            self.notify("No packages to check.", severity="warning")
+            return
+        names = [pkg.name for pkg in self._packages]
+        self._show_loading(f"Checking {len(names)} packages for updates...")
+        self._set_info("Checking for updates...")
+        try:
+            self._latest_versions, failures = await _fetch_latest_versions(names)
+        except Exception as exc:
+            self._hide_loading()
+            self.notify(f"Outdated check failed: {exc}", severity="error")
+            return
+        self._repopulate_table()
+        # Build summary
+        outdated = sum(
+            1
+            for pkg in self._packages
+            if pkg.installed_version
+            and self._latest_versions.get(_normalise(pkg.name), "")
+            and pkg.installed_version
+            != self._latest_versions.get(_normalise(pkg.name), "")
+        )
+        info_parts = []
+        all_sources = set()
+        for pkg in self._packages:
+            for s in pkg.sources:
+                all_sources.add(s.file)
+        n_sources = len(all_sources)
+        info_parts.append(f"{len(self._packages)} packages")
+        info_parts.append(f"{n_sources} source{'s' if n_sources != 1 else ''}")
+        if outdated:
+            info_parts.append(f"{outdated} outdated")
+        self._set_info("  |  ".join(info_parts))
+        self._hide_loading()
+        # Toast summary
+        if failures:
+            self.notify(
+                f"Checked {len(names)} packages. {failures} failed (network errors).",
+                severity="warning",
+            )
+        elif outdated:
+            self.notify(
+                f"{outdated} package{'s' if outdated != 1 else ''} "
+                f"{'have' if outdated != 1 else 'has'} newer versions available.",
+                severity="warning",
+            )
+        else:
+            self.notify("All packages are up to date.", severity="information")
 
     def action_show_help(self) -> None:
         self.push_screen(HelpModal())
@@ -1103,11 +1243,14 @@ class DependencyManagerApp(App):
 
     @work(exclusive=True, group="manage")
     async def _do_init(self) -> None:
+        self._show_loading("Initialising project...")
         self._set_info("Initialising project...")
         ok, output = await self.pkg_mgr.init_project()
+        self._hide_loading()
         if ok:
             self.notify(
-                "Project initialised (pyproject.toml created).", severity="information"
+                "Project initialised — pyproject.toml created.",
+                severity="information",
             )
         else:
             self.notify(f"Init failed: {output[:200]}", severity="error")
@@ -1127,15 +1270,16 @@ class DependencyManagerApp(App):
     async def _do_add(self, result: tuple[str, str]) -> None:
         name, version = result
         label = f"{name}=={version}" if version else name
-        self.notify(f"Adding {label}...")
+        self._show_loading(f"Adding {label}...")
         self._set_info(f"uv add {label}...")
 
         ok, output = await self.pkg_mgr.add(name, version or None)
+        self._hide_loading()
 
         if ok:
-            self.notify(f"Added {label}", severity="information")
+            self.notify(f"Added {label} to pyproject.toml", severity="information")
         else:
-            self.notify(f"Add failed: {output[:200]}", severity="error")
+            self.notify(f"Failed to add {name}: {output[:200]}", severity="error")
         self._refresh_data()
 
     # -- Update ---------------------------------------------------------------
@@ -1162,15 +1306,16 @@ class DependencyManagerApp(App):
     async def _do_update(self, result: tuple[str, str]) -> None:
         name, version = result
         label = f"{name}=={version}" if version else name
-        self.notify(f"Updating {label}...")
+        self._show_loading(f"Updating {label}...")
         self._set_info(f"uv add {label}...")
 
         ok, output = await self.pkg_mgr.add(name, version or None)
+        self._hide_loading()
 
         if ok:
-            self.notify(f"Updated {label}", severity="information")
+            self.notify(f"Updated {label} in pyproject.toml", severity="information")
         else:
-            self.notify(f"Update failed: {output[:200]}", severity="error")
+            self.notify(f"Failed to update {name}: {output[:200]}", severity="error")
         self._refresh_data()
 
     # -- Delete ---------------------------------------------------------------
@@ -1212,13 +1357,15 @@ class DependencyManagerApp(App):
 
     @work(exclusive=True, group="manage")
     async def _do_remove(self, pkg: Package, source_file: str) -> None:
-        self.notify(f"Removing {pkg.name} from {source_file}...")
+        self._show_loading(f"Removing {pkg.name} from {source_file}...")
         self._set_info(f"Removing {pkg.name}...")
 
         # setup.py → manual only
         if source_file == "setup.py":
+            self._hide_loading()
             self.notify(
-                "Cannot auto-edit setup.py. Remove manually.",
+                "Cannot auto-edit setup.py — please remove the "
+                f"dependency '{pkg.name}' manually.",
                 severity="warning",
             )
             return
@@ -1241,15 +1388,20 @@ class DependencyManagerApp(App):
         elif source_file == "venv":
             ok, output = await self.pkg_mgr.pip_uninstall(pkg.name)
         else:
+            self._hide_loading()
             self.notify(f"Unknown source: {source_file}", severity="error")
             return
 
+        self._hide_loading()
         if ok:
             self.notify(
                 f"Removed {pkg.name} from {source_file}", severity="information"
             )
         else:
-            self.notify(f"Remove failed: {output[:200]}", severity="error")
+            self.notify(
+                f"Failed to remove {pkg.name}: {output[:200]}",
+                severity="error",
+            )
         self._refresh_data()
 
     # -- helpers --------------------------------------------------------------

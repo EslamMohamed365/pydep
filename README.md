@@ -4,13 +4,17 @@ A fully keyboard-driven terminal UI for managing Python project dependencies, po
 
 PyDep scans your project for dependencies across multiple sources — `pyproject.toml`, `requirements.txt`, `setup.py`, `setup.cfg`, `Pipfile`, and installed packages — and presents them in a unified, searchable table with Vim-style navigation.
 
+![PyDep Demo](demo.gif)
+
 ## Features
 
 - **Multi-source scanning** — Aggregates dependencies from 6 sources into a single view, merging duplicates by normalized name (PEP 503)
 - **Vim-style navigation** — `j`/`k` movement, `gg` jump to top, `G` jump to bottom, `/` incremental search
 - **Keyboard-first** — No mouse required. Every action has a keybinding
 - **PyPI validation** — Async package/version verification before any install or update. Leave version blank to auto-resolve the latest
+- **Outdated check** — Batch-query PyPI for the latest version of every package. Color-coded: green = up to date, yellow = outdated
 - **Source-aware deletion** — Remove a package from a specific source file. Multi-source packages prompt you to choose which source
+- **Loading indicators** — Visual feedback during all async operations (refresh, add, update, delete, outdated check)
 - **uv integration** — Uses `uv add`, `uv remove`, and `uv pip` under the hood
 - **Tokyo Night theme** — Consistent dark color palette across all UI elements
 
@@ -48,6 +52,7 @@ If no `pyproject.toml` exists in the current directory, PyDep will offer to init
 | `a` | Add a package |
 | `u` | Update selected package |
 | `d` | Delete selected package |
+| `o` | Check outdated packages |
 | `r` | Refresh package list |
 | `i` | Initialize project (`uv init --bare`) |
 | `?` | Toggle help overlay |
@@ -87,8 +92,9 @@ If no `pyproject.toml` exists in the current directory, PyDep will offer to init
 pydep/
   app.py          # Application code: data model, parsers, modals, TUI
   app.tcss        # Tokyo Night themed Textual CSS
-  test_app.py     # 49 headless tests (Textual pilot)
+  test_app.py     # 57 headless tests (Textual pilot)
   pyproject.toml  # Project metadata and dependencies
+  demo.tape       # VHS script for generating the demo GIF
 ```
 
 ## Testing
@@ -97,7 +103,7 @@ pydep/
 uv run pytest test_app.py -v
 ```
 
-49 tests covering:
+57 tests covering:
 
 - All 6 dependency parsers (including missing-file edge cases)
 - Multi-source merge logic
@@ -106,6 +112,8 @@ uv run pytest test_app.py -v
 - All modal interactions
 - Per-source removal functions
 - Source-aware deletion flow (single-source vs multi-source)
+- Outdated check (batch query, UI integration, status bar)
+- Loading overlay
 
 ## Contributing
 

@@ -139,6 +139,14 @@ class PackageManager:
         """Remove a dependency from the project."""
         return await self._run("remove", package)
 
+    async def remove_from_group(self, package: str, group: str) -> tuple[bool, str]:
+        """Remove a dependency from an optional-dependencies group."""
+        return await self._run("remove", "--group", group, package)
+
+    async def pip_uninstall(self, package: str) -> tuple[bool, str]:
+        """Uninstall a package from the active virtual environment."""
+        return await self._run("pip", "uninstall", package)
+
 
 # =============================================================================
 # Dependency Parsing  (multi-source scanner)
@@ -431,6 +439,87 @@ def load_dependencies(
 
 
 # =============================================================================
+# Per-source Removal Helpers
+# =============================================================================
+
+
+def _remove_from_requirements(path: Path, pkg_name: str) -> tuple[bool, str]:
+    """Remove a package line from a ``requirements.txt``-style file."""
+    if not path.is_file():
+        return False, f"{path.name} not found"
+    norm = _normalise(pkg_name)
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    new_lines: list[str] = []
+    removed = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and not stripped.startswith("-"):
+            parsed = _parse_dep_string(stripped)
+            if parsed and _normalise(parsed[0]) == norm:
+                removed = True
+                continue
+        new_lines.append(line)
+    if not removed:
+        return False, f"'{pkg_name}' not found in {path.name}"
+    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    return True, f"Removed '{pkg_name}' from {path.name}"
+
+
+def _remove_from_setup_cfg(path: Path, pkg_name: str) -> tuple[bool, str]:
+    """Remove a package from ``setup.cfg`` ``[options].install_requires``."""
+    if not path.is_file():
+        return False, "setup.cfg not found"
+    norm = _normalise(pkg_name)
+    cfg = configparser.ConfigParser()
+    try:
+        cfg.read(str(path), encoding="utf-8")
+    except Exception as exc:
+        return False, f"Failed to parse setup.cfg: {exc}"
+    raw = cfg.get("options", "install_requires", fallback="")
+    lines = [l.strip() for l in raw.strip().splitlines() if l.strip()]
+    new_lines: list[str] = []
+    removed = False
+    for line in lines:
+        parsed = _parse_dep_string(line)
+        if parsed and _normalise(parsed[0]) == norm:
+            removed = True
+            continue
+        new_lines.append(line)
+    if not removed:
+        return False, f"'{pkg_name}' not found in setup.cfg"
+    cfg.set(
+        "options",
+        "install_requires",
+        "\n" + "\n".join(new_lines) if new_lines else "",
+    )
+    with open(path, "w", encoding="utf-8") as fh:
+        cfg.write(fh)
+    return True, f"Removed '{pkg_name}' from setup.cfg"
+
+
+def _remove_from_pipfile(path: Path, pkg_name: str) -> tuple[bool, str]:
+    """Remove a package key from ``Pipfile`` (``[packages]`` or ``[dev-packages]``)."""
+    if not path.is_file():
+        return False, "Pipfile not found"
+    norm = _normalise(pkg_name)
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    new_lines: list[str] = []
+    removed = False
+    for line in lines:
+        stripped = line.strip()
+        m = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*=", stripped)
+        if m and _normalise(m.group(1)) == norm:
+            removed = True
+            continue
+        new_lines.append(line)
+    if not removed:
+        return False, f"'{pkg_name}' not found in Pipfile"
+    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    return True, f"Removed '{pkg_name}' from Pipfile"
+
+
+# =============================================================================
 # PyPI Validation
 # =============================================================================
 
@@ -654,6 +743,79 @@ class HelpModal(ModalScreen[None]):
         self.dismiss(None)
 
     def action_close(self) -> None:
+        self.dismiss(None)
+
+
+# ---------------------------------------------------------------------------
+
+
+class SourceSelectModal(ModalScreen[str | None]):
+    """Pick which source file to remove a package from."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "confirm", "Confirm"),
+    ]
+
+    def __init__(self, pkg_name: str, sources: list[DepSource]) -> None:
+        super().__init__()
+        self._pkg_name = pkg_name
+        self._sources = sources
+        self._selected = 0
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="source-select-dialog"):
+            yield Static(f"Remove '{self._pkg_name}' from:", id="source-select-title")
+            yield Static("", id="source-select-list")
+            yield Static(
+                "[#565f89]j/k move  ·  Enter select  ·  Esc cancel[/]",
+                id="source-select-hint",
+            )
+
+    def on_mount(self) -> None:
+        self._render_list()
+
+    def _render_list(self) -> None:
+        lines: list[str] = []
+        for i, src in enumerate(self._sources):
+            marker = "▸" if i == self._selected else " "
+            if i == self._selected:
+                lines.append(
+                    f"  [#c0caf5]{marker} {i + 1}. {src.file}[/]"
+                    f"  [#565f89]({src.specifier})[/]"
+                )
+            else:
+                lines.append(
+                    f"  [#565f89]{marker} {i + 1}. {src.file}  ({src.specifier})[/]"
+                )
+        self.query_one("#source-select-list", Static).update("\n".join(lines))
+
+    def on_key(self, event: events.Key) -> None:
+        key = event.key
+        if key == "j" or key == "down":
+            event.prevent_default()
+            event.stop()
+            self._selected = min(self._selected + 1, len(self._sources) - 1)
+            self._render_list()
+            return
+        if key == "k" or key == "up":
+            event.prevent_default()
+            event.stop()
+            self._selected = max(self._selected - 1, 0)
+            self._render_list()
+            return
+        if key.isdigit():
+            idx = int(key) - 1
+            if 0 <= idx < len(self._sources):
+                event.prevent_default()
+                event.stop()
+                self.dismiss(self._sources[idx].file)
+            return
+
+    def action_confirm(self) -> None:
+        self.dismiss(self._sources[self._selected].file)
+
+    def action_cancel(self) -> None:
         self.dismiss(None)
 
 
@@ -1016,27 +1178,73 @@ class DependencyManagerApp(App):
             self.notify("Select a package first.", severity="warning")
             return
 
+        if len(pkg.sources) == 1:
+            # Single source → go straight to confirm
+            self._confirm_and_remove(pkg, pkg.sources[0].file)
+        else:
+            # Multiple sources → let user pick which one
+            def _on_source_selected(source_file: str | None) -> None:
+                if source_file is not None:
+                    self._confirm_and_remove(pkg, source_file)
+
+            self.push_screen(
+                SourceSelectModal(pkg.name, pkg.sources),
+                callback=_on_source_selected,
+            )
+
+    def _confirm_and_remove(self, pkg: Package, source_file: str) -> None:
+        """Show a ConfirmModal then route to the correct removal strategy."""
+
         def _on_confirm(confirmed: bool | None) -> None:
             if confirmed:
-                self._do_remove(pkg)
+                self._do_remove(pkg, source_file)
 
         self.push_screen(
             ConfirmModal(
-                message=f"Remove '{pkg.name}' from project?",
+                message=f"Remove '{pkg.name}' from {source_file}?",
                 title="Delete Package",
             ),
             callback=_on_confirm,
         )
 
     @work(exclusive=True, group="manage")
-    async def _do_remove(self, pkg: Package) -> None:
-        self.notify(f"Removing {pkg.name}...")
-        self._set_info(f"uv remove {pkg.name}...")
+    async def _do_remove(self, pkg: Package, source_file: str) -> None:
+        self.notify(f"Removing {pkg.name} from {source_file}...")
+        self._set_info(f"Removing {pkg.name}...")
 
-        ok, output = await self.pkg_mgr.remove(pkg.name)
+        # setup.py → manual only
+        if source_file == "setup.py":
+            self.notify(
+                "Cannot auto-edit setup.py. Remove manually.",
+                severity="warning",
+            )
+            return
+
+        ok, output = False, ""
+        cwd = Path.cwd()
+
+        if source_file == "pyproject.toml":
+            ok, output = await self.pkg_mgr.remove(pkg.name)
+        elif source_file.startswith("pyproject.toml ["):
+            # Extract group name from "pyproject.toml [groupname]"
+            group = source_file.split("[", 1)[1].rstrip("]").strip()
+            ok, output = await self.pkg_mgr.remove_from_group(pkg.name, group)
+        elif source_file.startswith("requirements"):
+            ok, output = _remove_from_requirements(cwd / source_file, pkg.name)
+        elif source_file == "setup.cfg":
+            ok, output = _remove_from_setup_cfg(cwd / "setup.cfg", pkg.name)
+        elif source_file.startswith("Pipfile"):
+            ok, output = _remove_from_pipfile(cwd / "Pipfile", pkg.name)
+        elif source_file == "venv":
+            ok, output = await self.pkg_mgr.pip_uninstall(pkg.name)
+        else:
+            self.notify(f"Unknown source: {source_file}", severity="error")
+            return
 
         if ok:
-            self.notify(f"Removed {pkg.name}", severity="information")
+            self.notify(
+                f"Removed {pkg.name} from {source_file}", severity="information"
+            )
         else:
             self.notify(f"Remove failed: {output[:200]}", severity="error")
         self._refresh_data()

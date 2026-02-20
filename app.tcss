@@ -323,3 +323,37 @@ Toast {
     margin: 0;
     padding: 0 1;
 }
+
+/* --- Source Select Modal --- */
+
+#source-select-dialog {
+    width: 50;
+    height: auto;
+    max-height: 18;
+    background: #24283b;
+    border: thick #bb9af7 60%;
+    padding: 1 2;
+}
+
+#source-select-title {
+    text-style: bold;
+    color: #bb9af7;
+    text-align: center;
+    margin: 0 0 1 0;
+    width: 100%;
+}
+
+#source-select-list {
+    width: 100%;
+    color: #c0caf5;
+    margin: 0 0 1 0;
+    padding: 0 1;
+    height: auto;
+}
+
+#source-select-hint {
+    width: 100%;
+    color: #565f89;
+    text-align: center;
+    height: 1;
+}

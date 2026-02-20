@@ -1,5 +1,5 @@
 """
-Headless tests for SetEnv TUI application.
+Headless tests for PyDep TUI application.
 
 These tests verify:
   1. Module imports (including new DepSource, SourceSelectModal)

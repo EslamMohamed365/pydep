@@ -1,5 +1,5 @@
 /* =============================================================================
-   SetEnv - Python Dependency Manager TUI
+   PyDep - Python Dependency Manager TUI
    Theme: Tokyo Night
    Palette:
      bg-dark:      #1a1b26    bg-surface:   #24283b    bg-highlight: #292e42

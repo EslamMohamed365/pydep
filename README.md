@@ -1,8 +1,8 @@
-# SetEnv
+# PyDep
 
 A fully keyboard-driven terminal UI for managing Python project dependencies, powered by [uv](https://docs.astral.sh/uv/) and themed with the [Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme) color palette.
 
-SetEnv scans your project for dependencies across multiple sources — `pyproject.toml`, `requirements.txt`, `setup.py`, `setup.cfg`, `Pipfile`, and installed packages — and presents them in a unified, searchable table with Vim-style navigation.
+PyDep scans your project for dependencies across multiple sources — `pyproject.toml`, `requirements.txt`, `setup.py`, `setup.cfg`, `Pipfile`, and installed packages — and presents them in a unified, searchable table with Vim-style navigation.
 
 ## Features
 
@@ -22,8 +22,8 @@ SetEnv scans your project for dependencies across multiple sources — `pyprojec
 ## Installation
 
 ```bash
-git clone https://github.com/EslamMohamed365/setenv.git
-cd setenv
+git clone https://github.com/EslamMohamed365/pydep.git
+cd pydep
 uv sync
 ```
 
@@ -33,7 +33,7 @@ uv sync
 uv run python app.py
 ```
 
-If no `pyproject.toml` exists in the current directory, SetEnv will offer to initialize one via `uv init --bare`.
+If no `pyproject.toml` exists in the current directory, PyDep will offer to initialize one via `uv init --bare`.
 
 ## Keybindings
 
@@ -84,7 +84,7 @@ If no `pyproject.toml` exists in the current directory, SetEnv will offer to ini
 ## Project Structure
 
 ```
-setenv/
+pydep/
   app.py          # Application code: data model, parsers, modals, TUI
   app.tcss        # Tokyo Night themed Textual CSS
   test_app.py     # 49 headless tests (Textual pilot)

@@ -1,5 +1,5 @@
 """
-SetEnv - Python Dependency Manager TUI
+PyDep - Python Dependency Manager TUI
 =======================================
 
 A fully keyboard-driven Terminal User Interface for managing Python project
@@ -828,9 +828,9 @@ _GG_TIMEOUT = 0.5
 
 
 class DependencyManagerApp(App):
-    """SetEnv - manage Python dependencies with Vim motions."""
+    """PyDep - manage Python dependencies with Vim motions."""
 
-    TITLE = "SetEnv"
+    TITLE = "PyDep"
     SUB_TITLE = "Python Dependency Manager"
     CSS_PATH = "app.tcss"
 

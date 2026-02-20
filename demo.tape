@@ -17,8 +17,24 @@ Type "uv run python app.py"
 Enter
 Sleep 3s
 
-# Navigate with Vim motions
+# Panel navigation with Tab
 Sleep 1s
+Tab
+Sleep 600ms
+Tab
+Sleep 600ms
+Tab
+Sleep 600ms
+
+# Jump to panels with number keys
+Type "1"
+Sleep 500ms
+Type "2"
+Sleep 500ms
+Type "3"
+Sleep 500ms
+
+# Navigate packages with Vim motions
 Type "j"
 Sleep 400ms
 Type "j"
@@ -36,16 +52,37 @@ Sleep 1s
 Type "gg"
 Sleep 1s
 
-# Search mode
+# Switch to sources panel and navigate
+Type "2"
+Sleep 500ms
+Type "j"
+Sleep 400ms
+Type "j"
+Sleep 400ms
+Enter
+Sleep 1s
+
+# Back to all sources
+Type "gg"
+Sleep 400ms
+Enter
+Sleep 1s
+
+# Filter mode
+Type "3"
+Sleep 500ms
 Type "/"
 Sleep 500ms
 Type "httpx"
 Sleep 1.5s
 
-# Clear search and return
-Ctrl+A
-Backspace
+# Close filter keeping text
+Enter
 Sleep 500ms
+
+# Clear filter
+Type "/"
+Sleep 300ms
 Escape
 Sleep 1s
 

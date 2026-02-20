@@ -8,14 +8,15 @@ color palette and navigable with Vim motions.
 
 Features
 --------
-* Reads ``[project].dependencies`` from ``pyproject.toml`` and resolves locked
-  versions from ``uv.lock``.
-* Uses ``uv add`` / ``uv remove`` to manage the dependency list (writes back
-  to ``pyproject.toml`` automatically).
+* Lazygit-style multi-panel layout: Status, Sources, Packages, and Details.
+* Reads dependencies from ``pyproject.toml``, ``requirements*.txt``,
+  ``setup.py``, ``setup.cfg``, ``Pipfile``, and the active virtual
+  environment.
+* Uses ``uv add`` / ``uv remove`` to manage the dependency list.
 * Async PyPI validation before any install/update; defaults to the latest
   version when the user leaves the version field blank.
 * Vim-style navigation: ``j``/``k``, ``gg``, ``G``, ``/`` search,
-  ``d`` delete, and more.
+  ``d`` delete, ``Tab`` panel cycling, ``1``/``2``/``3`` panel jump.
 * Tokyo Night themed via Textual CSS.
 
 Usage::
@@ -29,6 +30,8 @@ import asyncio
 import json
 import re
 import shutil
+import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,12 +47,11 @@ from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
+from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
-    DataTable,
     Footer,
-    Header,
     Input,
     LoadingIndicator,
     Static,
@@ -147,6 +149,10 @@ class PackageManager:
     async def pip_uninstall(self, package: str) -> tuple[bool, str]:
         """Uninstall a package from the active virtual environment."""
         return await self._run("pip", "uninstall", package)
+
+    async def create_venv(self) -> tuple[bool, str]:
+        """Create a virtual environment via ``uv venv``."""
+        return await self._run("venv")
 
 
 # =============================================================================
@@ -603,6 +609,418 @@ async def _fetch_latest_versions(
 
 
 # =============================================================================
+# Environment Info Helpers
+# =============================================================================
+
+
+def _get_python_version() -> str:
+    """Return the Python version string."""
+    return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+
+def _get_uv_version() -> str:
+    """Return the uv version string, or 'unknown'."""
+    uv = shutil.which("uv")
+    if not uv:
+        return "unknown"
+    try:
+        result = subprocess.run(
+            [uv, "--version"], capture_output=True, text=True, timeout=5
+        )
+        # output is like "uv 0.6.3 (abcdef 2025-01-01)"
+        parts = result.stdout.strip().split()
+        if len(parts) >= 2:
+            return parts[1]
+        return result.stdout.strip()
+    except Exception:
+        return "unknown"
+
+
+def _venv_exists() -> bool:
+    """Check if a .venv directory exists in CWD."""
+    return Path(".venv").is_dir()
+
+
+# =============================================================================
+# Panel Widgets
+# =============================================================================
+
+
+class PanelWidget(Static):
+    """Base panel widget with a title and active/inactive border colors.
+
+    Subclass this to create the Status, Sources, Packages, and Details panels.
+    The active panel gets a bright border (#7aa2f7), inactive gets dim (#3b4261).
+    """
+
+    panel_title: reactive[str] = reactive("")
+    is_active: reactive[bool] = reactive(False)
+
+    def __init__(
+        self,
+        title: str = "",
+        *,
+        id: str | None = None,
+        classes: str | None = None,
+    ) -> None:
+        super().__init__(id=id, classes=classes)
+        self.panel_title = title
+        self.can_focus = True
+
+    def on_focus(self) -> None:
+        self.is_active = True
+
+    def on_blur(self) -> None:
+        self.is_active = False
+
+    def watch_is_active(self, active: bool) -> None:
+        if active:
+            self.add_class("panel-active")
+            self.remove_class("panel-inactive")
+        else:
+            self.remove_class("panel-active")
+            self.add_class("panel-inactive")
+
+    def watch_panel_title(self, title: str) -> None:
+        self.border_title = title
+
+
+class StatusPanel(PanelWidget):
+    """Non-navigable panel showing project status info."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(title="Status", id="status-panel", **kwargs)
+        self._info_text = ""
+
+    def on_mount(self) -> None:
+        self.border_title = "Status"
+        self.add_class("panel-inactive")
+
+    def update_info(
+        self,
+        *,
+        pkg_count: int = 0,
+        source_count: int = 0,
+        outdated_count: int = 0,
+        venv_ok: bool = False,
+    ) -> None:
+        """Rebuild the status display."""
+        python_ver = _get_python_version()
+        uv_ver = _get_uv_version()
+        venv_ok = _venv_exists()
+
+        lines: list[str] = []
+        lines.append(f"[bold #7aa2f7]PyDep[/] [#565f89]v0.1.0[/]")
+        lines.append(f"[#c0caf5]Python[/] [#9ece6a]{python_ver}[/]")
+        lines.append(f"[#c0caf5]uv[/]     [#9ece6a]{uv_ver}[/]")
+
+        if venv_ok:
+            lines.append(f"[#c0caf5]venv:[/]  [#9ece6a].venv \u2713[/]")
+        else:
+            lines.append(f"[#c0caf5]venv:[/]  [#f7768e]No venv[/]")
+
+        lines.append(f"[#c0caf5]{pkg_count}[/] [#565f89]packages[/]")
+        if source_count:
+            lines.append(
+                f"[#c0caf5]{source_count}[/] [#565f89]source{'s' if source_count != 1 else ''}[/]"
+            )
+        if outdated_count:
+            lines.append(f"[#e0af68]{outdated_count}[/] [#565f89]outdated[/]")
+
+        self._info_text = "\n".join(lines)
+        self.update(self._info_text)
+
+
+class SourcesPanel(PanelWidget):
+    """Navigable list of discovered source files."""
+
+    selected_index: reactive[int] = reactive(0)
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(title="Sources", id="sources-panel", **kwargs)
+        self._sources: list[str] = []
+
+    def on_mount(self) -> None:
+        self.border_title = "Sources [0]"
+        self.add_class("panel-inactive")
+
+    def set_sources(self, sources: list[str]) -> None:
+        """Update the list of source files."""
+        self._sources = ["All Sources"] + sources
+        if self.selected_index >= len(self._sources):
+            self.selected_index = 0
+        self.border_title = f"Sources [{len(sources)}]"
+        self._render_list()
+
+    def get_selected_source(self) -> str | None:
+        """Return the currently selected source, or None for 'All Sources'."""
+        if not self._sources or self.selected_index == 0:
+            return None
+        return self._sources[self.selected_index]
+
+    def _render_list(self) -> None:
+        lines: list[str] = []
+        for i, src in enumerate(self._sources):
+            marker = "\u25b8" if i == self.selected_index else " "
+            if i == self.selected_index:
+                lines.append(f"[#c0caf5]{marker} {src}[/]")
+            else:
+                lines.append(f"[#565f89]{marker} {src}[/]")
+        self.update("\n".join(lines))
+
+    def move_up(self) -> None:
+        if self._sources and self.selected_index > 0:
+            self.selected_index -= 1
+            self._render_list()
+
+    def move_down(self) -> None:
+        if self._sources and self.selected_index < len(self._sources) - 1:
+            self.selected_index += 1
+            self._render_list()
+
+    def jump_top(self) -> None:
+        if self._sources:
+            self.selected_index = 0
+            self._render_list()
+
+    def jump_bottom(self) -> None:
+        if self._sources:
+            self.selected_index = len(self._sources) - 1
+            self._render_list()
+
+
+class PackagesPanel(PanelWidget):
+    """Navigable list of packages replacing DataTable."""
+
+    selected_index: reactive[int] = reactive(0)
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(title="Packages", id="packages-panel", **kwargs)
+        self._all_packages: list[Package] = []
+        self._filtered_packages: list[Package] = []
+        self._latest_versions: dict[str, str] = {}
+        self._filter: str = ""
+        self._source_filter: str | None = None
+        self._filter_active: bool = False
+
+    def on_mount(self) -> None:
+        self.border_title = "Packages [0]"
+        self.add_class("panel-inactive")
+
+    def set_packages(
+        self,
+        packages: list[Package],
+        latest: dict[str, str] | None = None,
+        source_filter: str | None = None,
+    ) -> None:
+        """Update the package list."""
+        self._all_packages = packages
+        if latest is not None:
+            self._latest_versions = latest
+        self._source_filter = source_filter
+        self._apply_filters()
+
+    def set_latest_versions(self, latest: dict[str, str]) -> None:
+        self._latest_versions = latest
+        self._apply_filters()
+
+    def set_source_filter(self, source: str | None) -> None:
+        self._source_filter = source
+        self._apply_filters()
+
+    def set_text_filter(self, text: str) -> None:
+        self._filter = text
+        self._apply_filters()
+
+    @property
+    def filter_active(self) -> bool:
+        return self._filter_active
+
+    @filter_active.setter
+    def filter_active(self, val: bool) -> None:
+        self._filter_active = val
+
+    def _apply_filters(self) -> None:
+        pkgs = self._all_packages
+
+        # Filter by source
+        if self._source_filter:
+            pkgs = [
+                p for p in pkgs if any(s.file == self._source_filter for s in p.sources)
+            ]
+
+        # Filter by text
+        query = self._filter.lower()
+        if query:
+            pkgs = [
+                p
+                for p in pkgs
+                if query in p.name.lower()
+                or any(query in s.file.lower() for s in p.sources)
+            ]
+
+        self._filtered_packages = pkgs
+        if self.selected_index >= len(self._filtered_packages):
+            self.selected_index = max(0, len(self._filtered_packages) - 1)
+        self.border_title = f"Packages [{len(self._filtered_packages)}]"
+        self._render_list()
+
+    def _render_list(self) -> None:
+        lines: list[str] = []
+        for i, pkg in enumerate(self._filtered_packages):
+            marker = "\u25b8" if i == self.selected_index else " "
+            norm = _normalise(pkg.name)
+            latest = self._latest_versions.get(norm, "")
+            ver = pkg.installed_version or "-"
+
+            # Color based on outdated status
+            if pkg.installed_version and latest:
+                if pkg.installed_version == latest:
+                    ver_style = "#9ece6a"  # green
+                else:
+                    ver_style = "#e0af68"  # yellow
+            elif pkg.installed_version:
+                ver_style = "#9ece6a"
+            else:
+                ver_style = "#565f89"
+
+            # Source indicators
+            src_tags = " ".join(s.file.split(".")[0][:3] for s in pkg.sources)
+
+            if i == self.selected_index:
+                lines.append(
+                    f"[#c0caf5]{marker} {pkg.name:<20}[/]"
+                    f" [{ver_style}]{ver:<12}[/]"
+                    f" [#565f89]{src_tags}[/]"
+                )
+            else:
+                lines.append(
+                    f"[#565f89]{marker}[/] [#8893b3]{pkg.name:<20}[/]"
+                    f" [{ver_style}]{ver:<12}[/]"
+                    f" [#3b4261]{src_tags}[/]"
+                )
+
+        if not lines:
+            lines.append("[#565f89] No packages[/]")
+
+        self.update("\n".join(lines))
+
+    def get_selected_package(self) -> Package | None:
+        if not self._filtered_packages:
+            return None
+        if 0 <= self.selected_index < len(self._filtered_packages):
+            return self._filtered_packages[self.selected_index]
+        return None
+
+    @property
+    def package_count(self) -> int:
+        return len(self._filtered_packages)
+
+    def move_up(self) -> None:
+        if self._filtered_packages and self.selected_index > 0:
+            self.selected_index -= 1
+            self._render_list()
+
+    def move_down(self) -> None:
+        if (
+            self._filtered_packages
+            and self.selected_index < len(self._filtered_packages) - 1
+        ):
+            self.selected_index += 1
+            self._render_list()
+
+    def jump_top(self) -> None:
+        if self._filtered_packages:
+            self.selected_index = 0
+            self._render_list()
+
+    def jump_bottom(self) -> None:
+        if self._filtered_packages:
+            self.selected_index = len(self._filtered_packages) - 1
+            self._render_list()
+
+
+class DetailsPanel(PanelWidget):
+    """Right panel showing details of the selected package."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(title="Details", id="details-panel", **kwargs)
+        self.can_focus = False  # not navigable
+
+    def on_mount(self) -> None:
+        self.border_title = "Details"
+        self.add_class("panel-inactive")
+        self.update("[#565f89]Select a package to view details[/]")
+
+    def show_package(
+        self, pkg: Package | None, latest_versions: dict[str, str] | None = None
+    ) -> None:
+        if pkg is None:
+            self.update("[#565f89]Select a package to view details[/]")
+            return
+
+        latest_versions = latest_versions or {}
+        norm = _normalise(pkg.name)
+        latest = latest_versions.get(norm, "")
+
+        lines: list[str] = []
+        lines.append(f"[bold #c0caf5]{pkg.name}[/]")
+        lines.append("")
+
+        # Installed version
+        ver = pkg.installed_version or "-"
+        if pkg.installed_version and latest:
+            if pkg.installed_version == latest:
+                ver_color = "#9ece6a"
+                status = "[#9ece6a]Up to date[/]"
+            else:
+                ver_color = "#e0af68"
+                status = f"[#e0af68]Outdated[/] [#565f89](latest: {latest})[/]"
+        elif pkg.installed_version:
+            ver_color = "#9ece6a"
+            status = "[#565f89]Not checked[/]"
+        else:
+            ver_color = "#565f89"
+            status = "[#565f89]Not installed[/]"
+
+        lines.append(f"  [#7aa2f7]Installed:[/]  [{ver_color}]{ver}[/]")
+        if latest:
+            lines.append(f"  [#7aa2f7]Latest:[/]     [#7dcfff]{latest}[/]")
+        lines.append(f"  [#7aa2f7]Status:[/]     {status}")
+        lines.append("")
+
+        # Sources breakdown
+        lines.append("  [#7aa2f7]Sources:[/]")
+        for src in pkg.sources:
+            color = _source_color(src.file)
+            lines.append(f"    [{color}]{src.file}[/]  [#bb9af7]{src.specifier}[/]")
+
+        self.update("\n".join(lines))
+
+
+# =============================================================================
+# Source color helper (module-level)
+# =============================================================================
+
+_SOURCE_COLORS: dict[str, str] = {
+    "pyproject.toml": "#bb9af7",  # purple
+    "requirements": "#7dcfff",  # cyan  (prefix match)
+    "setup.py": "#e0af68",  # yellow
+    "setup.cfg": "#e0af68",  # yellow
+    "Pipfile": "#9ece6a",  # green
+    "venv": "#565f89",  # dim
+}
+
+
+def _source_color(label: str) -> str:
+    """Return the Tokyo Night color for a given source label."""
+    for prefix, color in _SOURCE_COLORS.items():
+        if label.startswith(prefix) or label == prefix:
+            return color
+    return "#c0caf5"
+
+
+# =============================================================================
 # Modal Screens
 # =============================================================================
 
@@ -739,26 +1157,33 @@ class UpdatePackageModal(PackageModal):
 
 
 _HELP_TEXT = """\
-[b #7aa2f7]NORMAL[/]  (table focused)
+[b #7aa2f7]NAVIGATION[/]
+  [#9ece6a]Tab[/]             Cycle panel focus
+  [#9ece6a]1[/] / [#9ece6a]2[/] / [#9ece6a]3[/]       Jump to Status / Sources / Packages
   [#9ece6a]j[/] / [#9ece6a]k[/]           Move down / up
-  [#9ece6a]g g[/]             Jump to first row
-  [#9ece6a]G[/]               Jump to last row
-  [#9ece6a]/[/]               Enter search mode
+  [#9ece6a]g g[/]             Jump to first item
+  [#9ece6a]G[/]               Jump to last item
+
+[b #7aa2f7]PACKAGES[/]  (any panel)
   [#9ece6a]a[/]               Add package
   [#9ece6a]u[/]               Update selected package
   [#9ece6a]d[/]               Delete selected package
+  [#9ece6a]/[/]               Filter packages
   [#9ece6a]o[/]               Check outdated packages
-  [#9ece6a]r[/]               Refresh list
+
+[b #7aa2f7]GLOBAL[/]
+  [#9ece6a]v[/]               Create virtual environment
+  [#9ece6a]r[/]               Refresh
   [#9ece6a]i[/]               Init project  (uv init)
   [#9ece6a]?[/]               Toggle this help
   [#9ece6a]q[/]               Quit
 
-[b #7aa2f7]SEARCH[/]  (search bar focused)
-  [#9ece6a]Escape[/]          Return to table
-  [#9ece6a]Enter[/]           Return to table
+[b #7aa2f7]FILTER MODE[/]  (search input focused)
+  [#9ece6a]Escape[/]          Clear and close filter
+  [#9ece6a]Enter[/]           Close filter (keep text)
   Type to filter packages in real time.
 
-[b #7aa2f7]MODAL[/]  (inside dialogs)
+[b #7aa2f7]MODALS[/]
   [#9ece6a]Tab[/]             Next field
   [#9ece6a]Enter[/]           Submit
   [#9ece6a]Escape[/]          Cancel
@@ -806,7 +1231,7 @@ class SourceSelectModal(ModalScreen[str | None]):
             yield Static(f"Remove '{self._pkg_name}' from:", id="source-select-title")
             yield Static("", id="source-select-list")
             yield Static(
-                "[#565f89]j/k move  ·  Enter select  ·  Esc cancel[/]",
+                "[#565f89]j/k move  \u00b7  Enter select  \u00b7  Esc cancel[/]",
                 id="source-select-hint",
             )
 
@@ -816,7 +1241,7 @@ class SourceSelectModal(ModalScreen[str | None]):
     def _render_list(self) -> None:
         lines: list[str] = []
         for i, src in enumerate(self._sources):
-            marker = "▸" if i == self._selected else " "
+            marker = "\u25b8" if i == self._selected else " "
             if i == self._selected:
                 lines.append(
                     f"  [#c0caf5]{marker} {i + 1}. {src.file}[/]"
@@ -878,8 +1303,9 @@ class DependencyManagerApp(App):
         Binding("d", "delete_package", "Delete", priority=True),
         Binding("o", "check_outdated", "Outdated", priority=True),
         Binding("r", "refresh", "Refresh", priority=True),
-        Binding("slash", "focus_search", "/Search", priority=True),
+        Binding("slash", "focus_search", "/Filter", priority=True),
         Binding("i", "init_project", "Init", priority=True),
+        Binding("v", "create_venv", "Venv", priority=True),
         Binding("question_mark", "show_help", "?Help", priority=True),
         Binding("q", "quit", "Quit", priority=True),
     ]
@@ -893,40 +1319,49 @@ class DependencyManagerApp(App):
         # gg sequence state
         self._pending_g: bool = False
         self._pending_g_time: float = 0.0
+        # Panel list for Tab cycling (only focusable panels)
+        self._panel_ids: list[str] = [
+            "status-panel",
+            "sources-panel",
+            "packages-panel",
+        ]
+        self._current_panel_idx: int = 2  # start on packages
 
     # -- layout ---------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        with Horizontal(id="search-bar"):
+        with Horizontal(id="main-layout"):
+            with Vertical(id="left-column"):
+                yield StatusPanel()
+                yield SourcesPanel()
+                yield PackagesPanel()
+            yield DetailsPanel()
+        with Horizontal(id="bottom-bar"):
+            yield Static("", id="hint-bar")
+        with Horizontal(id="filter-bar"):
             yield Input(
-                placeholder="Filter packages...  (press / to focus)", id="search-input"
+                placeholder="Filter packages...",
+                id="filter-input",
             )
-        yield DataTable(id="dep-table", zebra_stripes=True, cursor_type="row")
-        with Horizontal(id="status-bar"):
-            yield Static("NORMAL", id="mode-indicator")
-            yield Static("", id="status-info")
-        yield Footer()
         with Container(id="loading-overlay"):
             yield LoadingIndicator()
             yield Static("Loading...", id="loading-message")
 
     async def on_mount(self) -> None:
-        table = self.query_one("#dep-table", DataTable)
-        table.add_column("#", width=4, key="idx")
-        table.add_column("Package", width=22, key="name")
-        table.add_column("Specifier", width=30, key="specifier")
-        table.add_column("Installed", width=14, key="installed")
-        table.add_column("Latest", width=14, key="latest")
-        table.add_column("Source", width=30, key="source")
-        table.focus()
+        # Hide filter bar initially
+        self.query_one("#filter-bar").display = False
+
+        # Focus the packages panel
+        pkg_panel = self.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
+        self._current_panel_idx = 2
+        self._update_hint_bar()
 
         toml_path = Path.cwd() / "pyproject.toml"
         if toml_path.is_file():
             self._refresh_data()
         else:
-            self._set_mode("NORMAL")
-            self._set_info("No pyproject.toml found")
+            self._update_status_panel()
             self.push_screen(
                 ConfirmModal(
                     message="No pyproject.toml found.\nInitialise a new uv project?",
@@ -938,101 +1373,206 @@ class DependencyManagerApp(App):
     # -- Vim motion key handler -----------------------------------------------
 
     def on_key(self, event: events.Key) -> None:
-        """Intercept keys for Vim navigation when the DataTable is focused."""
+        """Intercept keys for Vim navigation and panel management."""
         focused = self.focused
-        table = self.query_one("#dep-table", DataTable)
-
-        # --- search input: Escape / Enter returns to table ---
-        if isinstance(focused, Input) and focused.id == "search-input":
-            if event.key == "escape":
-                event.prevent_default()
-                event.stop()
-                table.focus()
-            return
-
-        # --- only handle vim keys when table is focused ---
-        if focused is not table:
-            return
-
         key = event.key
 
-        # j / k  --  cursor movement
+        # --- filter input: Escape / Enter returns to panels ---
+        if isinstance(focused, Input) and focused.id == "filter-input":
+            if key == "escape":
+                event.prevent_default()
+                event.stop()
+                # Clear filter and close
+                focused.value = ""
+                self.query_one("#filter-bar").display = False
+                pkg_panel = self.query_one("#packages-panel", PackagesPanel)
+                pkg_panel.set_text_filter("")
+                pkg_panel.filter_active = False
+                pkg_panel.focus()
+                self._current_panel_idx = 2
+                self._update_details_for_selection()
+                self._update_hint_bar()
+                return
+            if key == "enter":
+                event.prevent_default()
+                event.stop()
+                # Keep filter text, close bar
+                self.query_one("#filter-bar").display = False
+                pkg_panel = self.query_one("#packages-panel", PackagesPanel)
+                pkg_panel.filter_active = False
+                pkg_panel.focus()
+                self._current_panel_idx = 2
+                self._update_details_for_selection()
+                self._update_hint_bar()
+                return
+            return
+
+        # --- Tab: cycle panels ---
+        if key == "tab":
+            event.prevent_default()
+            event.stop()
+            self._cycle_panel(1)
+            return
+
+        # shift+tab: cycle backwards
+        if key == "shift+tab":
+            event.prevent_default()
+            event.stop()
+            self._cycle_panel(-1)
+            return
+
+        # --- 1/2/3: jump to panel ---
+        if key == "1":
+            event.prevent_default()
+            event.stop()
+            self._jump_to_panel(0)
+            return
+        if key == "2":
+            event.prevent_default()
+            event.stop()
+            self._jump_to_panel(1)
+            return
+        if key == "3":
+            event.prevent_default()
+            event.stop()
+            self._jump_to_panel(2)
+            return
+
+        # --- Panel-specific Vim navigation ---
+        panel = self._get_focused_panel()
+        if panel is None:
+            return
+
+        # j / k movement
         if key == "j":
             event.prevent_default()
             event.stop()
-            table.action_cursor_down()
+            if isinstance(panel, (SourcesPanel, PackagesPanel)):
+                panel.move_down()
+                if isinstance(panel, SourcesPanel):
+                    self._on_source_selection_changed()
+                elif isinstance(panel, PackagesPanel):
+                    self._update_details_for_selection()
             return
+
         if key == "k":
             event.prevent_default()
             event.stop()
-            table.action_cursor_up()
+            if isinstance(panel, (SourcesPanel, PackagesPanel)):
+                panel.move_up()
+                if isinstance(panel, SourcesPanel):
+                    self._on_source_selection_changed()
+                elif isinstance(panel, PackagesPanel):
+                    self._update_details_for_selection()
             return
 
-        # G  --  jump to last row
+        # G  --  jump to last item
         if key == "G":
             event.prevent_default()
             event.stop()
-            if table.row_count > 0:
-                table.move_cursor(row=table.row_count - 1, animate=False)
+            if isinstance(panel, (SourcesPanel, PackagesPanel)):
+                panel.jump_bottom()
+                if isinstance(panel, SourcesPanel):
+                    self._on_source_selection_changed()
+                elif isinstance(panel, PackagesPanel):
+                    self._update_details_for_selection()
             return
 
-        # gg  --  jump to first row (two-key sequence)
+        # gg  --  jump to first item (two-key sequence)
         if key == "g":
             event.prevent_default()
             event.stop()
             now = time.monotonic()
             if self._pending_g and (now - self._pending_g_time) < _GG_TIMEOUT:
                 self._pending_g = False
-                if table.row_count > 0:
-                    table.move_cursor(row=0, animate=False)
+                if isinstance(panel, (SourcesPanel, PackagesPanel)):
+                    panel.jump_top()
+                    if isinstance(panel, SourcesPanel):
+                        self._on_source_selection_changed()
+                    elif isinstance(panel, PackagesPanel):
+                        self._update_details_for_selection()
             else:
                 self._pending_g = True
                 self._pending_g_time = now
+            return
+
+        # Enter on sources panel to select
+        if key == "enter" and isinstance(panel, SourcesPanel):
+            event.prevent_default()
+            event.stop()
+            self._on_source_selection_changed()
             return
 
         # Any other key resets the g-pending state
         if self._pending_g and key != "g":
             self._pending_g = False
 
-    # -- mode indicator -------------------------------------------------------
+    # -- panel focus management -----------------------------------------------
 
-    def watch_focused(self) -> None:
-        """Called whenever focus changes -- update the mode indicator."""
-        try:
-            focused = self.focused
-        except Exception:
-            return
-        if isinstance(focused, DataTable):
-            self._set_mode("NORMAL")
-        elif isinstance(focused, Input):
-            self._set_mode("SEARCH")
+    def _cycle_panel(self, direction: int = 1) -> None:
+        self._current_panel_idx = (self._current_panel_idx + direction) % len(
+            self._panel_ids
+        )
+        panel_id = self._panel_ids[self._current_panel_idx]
+        self.query_one(f"#{panel_id}").focus()
+        self._update_hint_bar()
+
+    def _jump_to_panel(self, idx: int) -> None:
+        if 0 <= idx < len(self._panel_ids):
+            self._current_panel_idx = idx
+            panel_id = self._panel_ids[idx]
+            self.query_one(f"#{panel_id}").focus()
+            self._update_hint_bar()
+
+    def _get_focused_panel(self) -> PanelWidget | None:
+        focused = self.focused
+        if isinstance(focused, PanelWidget):
+            return focused
+        return None
+
+    def _update_hint_bar(self) -> None:
+        """Update the bottom hint bar based on the focused panel."""
+        hint = self.query_one("#hint-bar", Static)
+        focused = self.focused
+
+        if isinstance(focused, StatusPanel):
+            hint.update(
+                "[#9ece6a]v[/] [#565f89]create venv[/]  "
+                "[#9ece6a]i[/] [#565f89]init project[/]  "
+                "[#9ece6a]r[/] [#565f89]refresh[/]  "
+                "[#9ece6a]?[/] [#565f89]help[/]  "
+                "[#9ece6a]q[/] [#565f89]quit[/]"
+            )
+        elif isinstance(focused, SourcesPanel):
+            hint.update(
+                "[#9ece6a]j/k[/] [#565f89]navigate[/]  "
+                "[#9ece6a]Enter[/] [#565f89]select[/]  "
+                "[#9ece6a]?[/] [#565f89]help[/]  "
+                "[#9ece6a]q[/] [#565f89]quit[/]"
+            )
+        elif isinstance(focused, PackagesPanel):
+            hint.update(
+                "[#9ece6a]j/k[/] [#565f89]navigate[/]  "
+                "[#9ece6a]a[/] [#565f89]add[/]  "
+                "[#9ece6a]u[/] [#565f89]update[/]  "
+                "[#9ece6a]d[/] [#565f89]delete[/]  "
+                "[#9ece6a]o[/] [#565f89]outdated[/]  "
+                "[#9ece6a]/[/] [#565f89]filter[/]  "
+                "[#9ece6a]?[/] [#565f89]help[/]  "
+                "[#9ece6a]q[/] [#565f89]quit[/]"
+            )
         else:
-            self._set_mode("NORMAL")
+            hint.update(
+                "[#9ece6a]Tab[/] [#565f89]cycle panels[/]  "
+                "[#9ece6a]?[/] [#565f89]help[/]  "
+                "[#9ece6a]q[/] [#565f89]quit[/]"
+            )
 
     def on_descendant_focus(self, _event: events.DescendantFocus) -> None:
-        self.watch_focused()
+        self._update_hint_bar()
 
     def on_descendant_blur(self, _event: events.DescendantBlur) -> None:
-        self.watch_focused()
-
-    # -- source color map -------------------------------------------------------
-
-    _SOURCE_COLORS: ClassVar[dict[str, str]] = {
-        "pyproject.toml": "#bb9af7",  # purple
-        "requirements": "#7dcfff",  # cyan  (prefix match)
-        "setup.py": "#e0af68",  # yellow
-        "setup.cfg": "#e0af68",  # yellow
-        "Pipfile": "#9ece6a",  # green
-        "venv": "#565f89",  # dim
-    }
-
-    @staticmethod
-    def _source_color(label: str) -> str:
-        """Return the Tokyo Night color for a given source label."""
-        for prefix, color in DependencyManagerApp._SOURCE_COLORS.items():
-            if label.startswith(prefix) or label == prefix:
-                return color
-        return "#c0caf5"  # default fg
+        self._update_hint_bar()
 
     # -- data loading ---------------------------------------------------------
 
@@ -1049,7 +1589,6 @@ class DependencyManagerApp(App):
     @work(exclusive=True, group="refresh")
     async def _refresh_data(self) -> None:
         self._show_loading("Scanning dependency sources...")
-        self._set_info("Scanning sources...")
         try:
             # Fetch installed packages asynchronously
             installed = await _parse_installed(self.pkg_mgr._uv)
@@ -1057,18 +1596,37 @@ class DependencyManagerApp(App):
         except Exception as exc:
             self.notify(f"Failed to load dependencies: {exc}", severity="error")
             self._packages = []
-        self._repopulate_table()
-        # Count distinct source files
-        all_sources = set()
+
+        # Collect sources
+        all_sources: set[str] = set()
         for pkg in self._packages:
             for s in pkg.sources:
                 all_sources.add(s.file)
-        n_sources = len(all_sources)
-        info_parts = [
-            f"{len(self._packages)} packages",
-            f"{n_sources} source{'s' if n_sources != 1 else ''}",
-        ]
-        # Include outdated count if we have version data
+
+        # Update all panels
+        sources_panel = self.query_one("#sources-panel", SourcesPanel)
+        sources_panel.set_sources(sorted(all_sources))
+
+        pkg_panel = self.query_one("#packages-panel", PackagesPanel)
+        source_filter = sources_panel.get_selected_source()
+        pkg_panel.set_packages(
+            self._packages,
+            latest=self._latest_versions,
+            source_filter=source_filter,
+        )
+
+        self._update_status_panel()
+        self._update_details_for_selection()
+        self._hide_loading()
+
+    def _update_status_panel(self) -> None:
+        """Refresh the status panel counts."""
+        all_sources: set[str] = set()
+        for pkg in self._packages:
+            for s in pkg.sources:
+                all_sources.add(s.file)
+
+        outdated = 0
         if self._latest_versions:
             outdated = sum(
                 1
@@ -1078,88 +1636,48 @@ class DependencyManagerApp(App):
                 and pkg.installed_version
                 != self._latest_versions.get(_normalise(pkg.name), "")
             )
-            if outdated:
-                info_parts.append(f"{outdated} outdated")
-        self._set_info("  |  ".join(info_parts))
-        self._hide_loading()
 
-    def _repopulate_table(self) -> None:
-        table = self.query_one("#dep-table", DataTable)
-        table.clear()
-        query = self._filter.lower()
-        for idx, pkg in enumerate(self._packages, start=1):
-            # Filter by name OR by source file name
-            if query:
-                name_match = query in pkg.name.lower()
-                source_match = any(query in s.file.lower() for s in pkg.sources)
-                if not name_match and not source_match:
-                    continue
+        status = self.query_one("#status-panel", StatusPanel)
+        status.update_info(
+            pkg_count=len(self._packages),
+            source_count=len(all_sources),
+            outdated_count=outdated,
+        )
 
-            # Installed version — color depends on outdated status
-            norm_name = _normalise(pkg.name)
-            latest = self._latest_versions.get(norm_name, "")
-            if pkg.installed_version and latest:
-                if pkg.installed_version == latest:
-                    inst_style = "#9ece6a"  # green — up to date
-                else:
-                    inst_style = "#e0af68"  # yellow — outdated
-            elif pkg.installed_version:
-                inst_style = "#9ece6a"  # green — installed, no check yet
-            else:
-                inst_style = "#565f89"  # dim — not installed
-            installed_text = Text(pkg.installed_version or "-", style=inst_style)
+    def _update_details_for_selection(self) -> None:
+        """Update the details panel for the currently selected package."""
+        pkg_panel = self.query_one("#packages-panel", PackagesPanel)
+        details = self.query_one("#details-panel", DetailsPanel)
+        pkg = pkg_panel.get_selected_package()
+        details.show_package(pkg, self._latest_versions)
 
-            # Latest version column
-            if latest:
-                latest_text = Text(latest, style="#7dcfff")
-            else:
-                latest_text = Text("-", style="#565f89")
-
-            # Specifier: per-source, e.g. ">=2.31 (pyproject.toml), * (venv)"
-            spec_text = Text()
-            for i, src in enumerate(pkg.sources):
-                if i > 0:
-                    spec_text.append(", ", style="#565f89")
-                spec_text.append(src.specifier, style="#bb9af7")
-                spec_text.append(f" ({src.file})", style="#565f89")
-
-            # Source column: comma-joined file names, each color-coded
-            seen_files: list[str] = []
-            for src in pkg.sources:
-                if src.file not in seen_files:
-                    seen_files.append(src.file)
-            source_text = Text()
-            for i, file in enumerate(seen_files):
-                if i > 0:
-                    source_text.append(", ", style="#565f89")
-                source_text.append(file, style=self._source_color(file))
-
-            table.add_row(
-                str(idx),
-                pkg.name,
-                spec_text,
-                installed_text,
-                latest_text,
-                source_text,
-                key=pkg.name,
-            )
+    def _on_source_selection_changed(self) -> None:
+        """When the selected source changes, filter the packages panel."""
+        sources_panel = self.query_one("#sources-panel", SourcesPanel)
+        pkg_panel = self.query_one("#packages-panel", PackagesPanel)
+        selected = sources_panel.get_selected_source()
+        pkg_panel.set_source_filter(selected)
+        self._update_details_for_selection()
 
     # -- reactive search ------------------------------------------------------
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "search-input":
+        if event.input.id == "filter-input":
             self._filter = event.value
-            self._repopulate_table()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Return to the table when Enter is pressed in the search bar."""
-        if event.input.id == "search-input":
-            self.query_one("#dep-table", DataTable).focus()
+            pkg_panel = self.query_one("#packages-panel", PackagesPanel)
+            pkg_panel.set_text_filter(event.value)
+            self._update_details_for_selection()
 
     # -- actions --------------------------------------------------------------
 
     def action_focus_search(self) -> None:
-        self.query_one("#search-input", Input).focus()
+        """Show the filter bar and focus it."""
+        filter_bar = self.query_one("#filter-bar")
+        filter_bar.display = True
+        filter_input = self.query_one("#filter-input", Input)
+        filter_input.focus()
+        pkg_panel = self.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.filter_active = True
 
     def action_refresh(self) -> None:
         self._refresh_data()
@@ -1175,15 +1693,22 @@ class DependencyManagerApp(App):
             return
         names = [pkg.name for pkg in self._packages]
         self._show_loading(f"Checking {len(names)} packages for updates...")
-        self._set_info("Checking for updates...")
         try:
             self._latest_versions, failures = await _fetch_latest_versions(names)
         except Exception as exc:
             self._hide_loading()
             self.notify(f"Outdated check failed: {exc}", severity="error")
             return
-        self._repopulate_table()
-        # Build summary
+
+        # Update packages panel with latest versions
+        pkg_panel = self.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.set_latest_versions(self._latest_versions)
+
+        self._update_status_panel()
+        self._update_details_for_selection()
+        self._hide_loading()
+
+        # Toast summary
         outdated = sum(
             1
             for pkg in self._packages
@@ -1192,19 +1717,6 @@ class DependencyManagerApp(App):
             and pkg.installed_version
             != self._latest_versions.get(_normalise(pkg.name), "")
         )
-        info_parts = []
-        all_sources = set()
-        for pkg in self._packages:
-            for s in pkg.sources:
-                all_sources.add(s.file)
-        n_sources = len(all_sources)
-        info_parts.append(f"{len(self._packages)} packages")
-        info_parts.append(f"{n_sources} source{'s' if n_sources != 1 else ''}")
-        if outdated:
-            info_parts.append(f"{outdated} outdated")
-        self._set_info("  |  ".join(info_parts))
-        self._hide_loading()
-        # Toast summary
         if failures:
             self.notify(
                 f"Checked {len(names)} packages. {failures} failed (network errors).",
@@ -1244,17 +1756,35 @@ class DependencyManagerApp(App):
     @work(exclusive=True, group="manage")
     async def _do_init(self) -> None:
         self._show_loading("Initialising project...")
-        self._set_info("Initialising project...")
         ok, output = await self.pkg_mgr.init_project()
         self._hide_loading()
         if ok:
             self.notify(
-                "Project initialised — pyproject.toml created.",
+                "Project initialised \u2014 pyproject.toml created.",
                 severity="information",
             )
         else:
             self.notify(f"Init failed: {output[:200]}", severity="error")
         self._refresh_data()
+
+    # -- Create venv ----------------------------------------------------------
+
+    def action_create_venv(self) -> None:
+        if _venv_exists():
+            self.notify("Virtual environment already exists.", severity="warning")
+            return
+        self._do_create_venv()
+
+    @work(exclusive=True, group="manage")
+    async def _do_create_venv(self) -> None:
+        self._show_loading("Creating virtual environment...")
+        ok, output = await self.pkg_mgr.create_venv()
+        self._hide_loading()
+        if ok:
+            self.notify("Created virtual environment (.venv)", severity="information")
+        else:
+            self.notify(f"Failed to create venv: {output[:200]}", severity="error")
+        self._update_status_panel()
 
     # -- Add ------------------------------------------------------------------
 
@@ -1271,7 +1801,6 @@ class DependencyManagerApp(App):
         name, version = result
         label = f"{name}=={version}" if version else name
         self._show_loading(f"Adding {label}...")
-        self._set_info(f"uv add {label}...")
 
         ok, output = await self.pkg_mgr.add(name, version or None)
         self._hide_loading()
@@ -1307,7 +1836,6 @@ class DependencyManagerApp(App):
         name, version = result
         label = f"{name}=={version}" if version else name
         self._show_loading(f"Updating {label}...")
-        self._set_info(f"uv add {label}...")
 
         ok, output = await self.pkg_mgr.add(name, version or None)
         self._hide_loading()
@@ -1327,10 +1855,10 @@ class DependencyManagerApp(App):
             return
 
         if len(pkg.sources) == 1:
-            # Single source → go straight to confirm
+            # Single source -> go straight to confirm
             self._confirm_and_remove(pkg, pkg.sources[0].file)
         else:
-            # Multiple sources → let user pick which one
+            # Multiple sources -> let user pick which one
             def _on_source_selected(source_file: str | None) -> None:
                 if source_file is not None:
                     self._confirm_and_remove(pkg, source_file)
@@ -1358,13 +1886,12 @@ class DependencyManagerApp(App):
     @work(exclusive=True, group="manage")
     async def _do_remove(self, pkg: Package, source_file: str) -> None:
         self._show_loading(f"Removing {pkg.name} from {source_file}...")
-        self._set_info(f"Removing {pkg.name}...")
 
-        # setup.py → manual only
+        # setup.py -> manual only
         if source_file == "setup.py":
             self._hide_loading()
             self.notify(
-                "Cannot auto-edit setup.py — please remove the "
+                "Cannot auto-edit setup.py \u2014 please remove the "
                 f"dependency '{pkg.name}' manually.",
                 severity="warning",
             )
@@ -1407,36 +1934,14 @@ class DependencyManagerApp(App):
     # -- helpers --------------------------------------------------------------
 
     def _selected_package(self) -> Package | None:
-        table = self.query_one("#dep-table", DataTable)
-        if table.row_count == 0:
-            return None
-        try:
-            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
-        except Exception:
-            return None
-        name = row_key.value
-        for pkg in self._packages:
-            if pkg.name == name:
-                return pkg
-        return None
+        pkg_panel = self.query_one("#packages-panel", PackagesPanel)
+        return pkg_panel.get_selected_package()
 
     def _ensure_toml_or_warn(self) -> None:
         if not (Path.cwd() / "pyproject.toml").is_file():
             self.notify(
                 "No pyproject.toml. Press [i] to initialise.", severity="warning"
             )
-
-    def _set_mode(self, mode: str) -> None:
-        indicator = self.query_one("#mode-indicator", Static)
-        if mode == "NORMAL":
-            indicator.update(Text("-- NORMAL --", style="bold #7aa2f7"))
-        elif mode == "SEARCH":
-            indicator.update(Text("-- SEARCH --", style="bold #9ece6a"))
-        else:
-            indicator.update(Text(f"-- {mode} --", style="bold #e0af68"))
-
-    def _set_info(self, text: str) -> None:
-        self.query_one("#status-info", Static).update(text)
 
 
 # =============================================================================

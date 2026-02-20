@@ -1,0 +1,325 @@
+/* =============================================================================
+   SetEnv - Python Dependency Manager TUI
+   Theme: Tokyo Night
+   Palette:
+     bg-dark:      #1a1b26    bg-surface:   #24283b    bg-highlight: #292e42
+     fg-primary:   #c0caf5    fg-secondary: #565f89    fg-dark:      #414868
+     accent-blue:  #7aa2f7    accent-green: #9ece6a    accent-red:   #f7768e
+     accent-yellow:#e0af68    accent-purple:#bb9af7    accent-cyan:  #7dcfff
+     border:       #3b4261
+   ============================================================================= */
+
+/* --- Screen & Global --- */
+
+Screen {
+    background: #1a1b26;
+    color: #c0caf5;
+}
+
+/* --- Header --- */
+
+Header {
+    background: #24283b;
+    color: #7aa2f7;
+    dock: top;
+    height: 1;
+}
+
+/* --- Footer --- */
+
+Footer {
+    background: #24283b;
+    color: #565f89;
+}
+
+FooterKey {
+    background: #24283b;
+    color: #7aa2f7;
+}
+
+FooterKey:hover {
+    background: #292e42;
+    color: #c0caf5;
+}
+
+/* --- Search Bar --- */
+
+#search-bar {
+    dock: top;
+    margin: 1 2 0 2;
+    height: 3;
+}
+
+#search-input {
+    width: 100%;
+    background: #24283b;
+    color: #c0caf5;
+    border: tall #3b4261;
+}
+
+#search-input:focus {
+    border: tall #7aa2f7;
+}
+
+#search-input > .input--placeholder {
+    color: #565f89;
+}
+
+/* --- Data Table --- */
+
+#dep-table {
+    margin: 1 2;
+    height: 1fr;
+    background: #1a1b26;
+    scrollbar-color: #3b4261;
+    scrollbar-color-hover: #565f89;
+    scrollbar-color-active: #7aa2f7;
+    scrollbar-background: #1a1b26;
+}
+
+DataTable > .datatable--header {
+    background: #24283b;
+    color: #7aa2f7;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: #292e42;
+    color: #c0caf5;
+}
+
+DataTable > .datatable--hover {
+    background: #292e42 40%;
+}
+
+DataTable > .datatable--even-row {
+    background: #1a1b26;
+}
+
+DataTable > .datatable--odd-row {
+    background: #1e2030;
+}
+
+/* --- Status Bar --- */
+
+#status-bar {
+    dock: bottom;
+    height: 1;
+    margin: 0 2;
+    background: #1a1b26;
+}
+
+#mode-indicator {
+    width: 16;
+    color: #7aa2f7;
+    text-style: bold;
+}
+
+#status-info {
+    width: 1fr;
+    color: #565f89;
+    text-align: right;
+}
+
+/* --- Modal Screens --- */
+
+ModalScreen {
+    align: center middle;
+    background: #1a1b26 80%;
+}
+
+#modal-dialog {
+    width: 60;
+    height: auto;
+    max-height: 22;
+    background: #24283b;
+    border: thick #3b4261;
+    padding: 1 2;
+}
+
+#modal-dialog Static {
+    width: 100%;
+    color: #c0caf5;
+    margin: 0 0 1 0;
+}
+
+#modal-title {
+    text-style: bold;
+    color: #7aa2f7;
+    text-align: center;
+    margin: 0 0 1 0;
+}
+
+#modal-dialog Input {
+    width: 100%;
+    margin: 0 0 1 0;
+    background: #1a1b26;
+    color: #c0caf5;
+    border: tall #3b4261;
+}
+
+#modal-dialog Input:focus {
+    border: tall #7aa2f7;
+}
+
+#modal-dialog Input > .input--placeholder {
+    color: #565f89;
+}
+
+#modal-dialog .modal-label {
+    color: #565f89;
+    margin: 0 0 0 0;
+    height: 1;
+}
+
+#modal-buttons {
+    height: 3;
+    align: center middle;
+    margin: 1 0 0 0;
+}
+
+#modal-buttons Button {
+    margin: 0 1;
+    min-width: 12;
+}
+
+#modal-btn-ok {
+    background: #1a3a1a;
+    color: #9ece6a;
+    border: tall #9ece6a 40%;
+}
+
+#modal-btn-ok:hover {
+    background: #9ece6a 20%;
+    border: tall #9ece6a;
+}
+
+#modal-btn-cancel {
+    background: #3a1a1a;
+    color: #f7768e;
+    border: tall #f7768e 40%;
+}
+
+#modal-btn-cancel:hover {
+    background: #f7768e 20%;
+    border: tall #f7768e;
+}
+
+/* --- Confirm Modal --- */
+
+#confirm-dialog {
+    width: 50;
+    height: auto;
+    max-height: 12;
+    background: #24283b;
+    border: thick #f7768e 60%;
+    padding: 1 2;
+}
+
+#confirm-dialog Static {
+    width: 100%;
+    color: #c0caf5;
+}
+
+#confirm-title {
+    text-style: bold;
+    color: #f7768e;
+    text-align: center;
+    margin: 0 0 1 0;
+}
+
+#confirm-message {
+    text-align: center;
+    margin: 0 0 1 0;
+}
+
+#confirm-buttons {
+    height: 3;
+    align: center middle;
+    margin: 1 0 0 0;
+}
+
+#confirm-buttons Button {
+    margin: 0 1;
+    min-width: 10;
+}
+
+#confirm-btn-yes {
+    background: #3a1a1a;
+    color: #f7768e;
+    border: tall #f7768e 40%;
+}
+
+#confirm-btn-yes:hover {
+    background: #f7768e 20%;
+    border: tall #f7768e;
+}
+
+#confirm-btn-no {
+    background: #1a2a4a;
+    color: #7aa2f7;
+    border: tall #7aa2f7 40%;
+}
+
+#confirm-btn-no:hover {
+    background: #7aa2f7 20%;
+    border: tall #7aa2f7;
+}
+
+/* --- Loading overlay --- */
+
+#loading-overlay {
+    width: 100%;
+    height: 100%;
+    align: center middle;
+    background: #1a1b26 60%;
+    layer: overlay;
+}
+
+LoadingIndicator {
+    color: #7aa2f7;
+    background: transparent;
+}
+
+/* --- Toast / Notification styling --- */
+
+Toast {
+    background: #24283b;
+    color: #c0caf5;
+    border: tall #3b4261;
+}
+
+/* --- Validation error label in modals --- */
+
+#validation-error {
+    color: #f7768e;
+    text-align: center;
+    height: auto;
+    margin: 0 0 1 0;
+}
+
+/* --- Help Modal --- */
+
+#help-dialog {
+    width: 56;
+    height: auto;
+    max-height: 28;
+    background: #24283b;
+    border: thick #7aa2f7 60%;
+    padding: 1 2;
+}
+
+#help-title {
+    text-style: bold;
+    color: #7aa2f7;
+    text-align: center;
+    margin: 0 0 1 0;
+    width: 100%;
+}
+
+#help-body {
+    width: 100%;
+    color: #c0caf5;
+    margin: 0;
+    padding: 0 1;
+}

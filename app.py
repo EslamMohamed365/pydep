@@ -954,7 +954,10 @@ class DependencyManagerApp(App):
 
     def watch_focused(self) -> None:
         """Called whenever focus changes -- update the mode indicator."""
-        focused = self.focused
+        try:
+            focused = self.focused
+        except Exception:
+            return
         if isinstance(focused, DataTable):
             self._set_mode("NORMAL")
         elif isinstance(focused, Input):

@@ -2,7 +2,7 @@
 Headless tests for SetEnv TUI application.
 
 These tests verify:
-  1. Module imports (including new DepSource)
+  1. Module imports (including new DepSource, SourceSelectModal)
   2. PackageManager finds uv
   3. Individual sub-parsers: pyproject.toml, requirements.txt, setup.py,
      setup.cfg, Pipfile
@@ -10,11 +10,14 @@ These tests verify:
   5. PyPI validation (4 scenarios)
   6. App lifecycle: mount, table population (5 columns), search filtering
   7. Vim motions: j/k cursor, gg jump to top, G jump to bottom
-  8. Modal opening via keybindings: a (Add), u (Update), x (Delete), ? (Help),
+  8. Modal opening via keybindings: a (Add), u (Update), d (Delete), ? (Help),
      i (Init)
   9. Search mode: / focuses input, Escape/Enter returns to table
  10. Mode indicator updates
  11. Search filters by source name
+ 12. Per-source removal functions (_remove_from_requirements, _remove_from_setup_cfg,
+     _remove_from_pipfile)
+ 13. Source-aware deletion flow (single-source vs multi-source, SourceSelectModal)
 """
 
 from __future__ import annotations
@@ -42,7 +45,11 @@ def test_imports():
         HelpModal,
         Package,
         PackageManager,
+        SourceSelectModal,
         UpdatePackageModal,
+        _remove_from_pipfile,
+        _remove_from_requirements,
+        _remove_from_setup_cfg,
         load_dependencies,
         validate_pypi,
     )
@@ -50,6 +57,7 @@ def test_imports():
     assert DependencyManagerApp is not None
     assert PackageManager is not None
     assert DepSource is not None
+    assert SourceSelectModal is not None
 
 
 # ---------------------------------------------------------------------------
@@ -778,7 +786,7 @@ async def test_update_modal_opens(app_with_deps):
 
 @pytest.mark.asyncio
 async def test_delete_confirm_opens(app_with_deps):
-    """x opens the delete confirmation modal."""
+    """d opens the delete confirmation modal (single-source package)."""
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
         table = app_with_deps.query_one("#dep-table")
@@ -808,3 +816,269 @@ async def test_init_modal_opens_no_toml(app_no_deps):
         title = app_no_deps.screen.query_one("#confirm-title")
         rendered = str(title.render())
         assert "Initialise" in rendered or "Init" in rendered
+
+
+# ---------------------------------------------------------------------------
+# 12. Per-source removal functions
+# ---------------------------------------------------------------------------
+
+
+def test_remove_from_requirements(tmp_path: Path):
+    """Remove a package line from requirements.txt."""
+    from app import _remove_from_requirements
+
+    req = tmp_path / "requirements.txt"
+    req.write_text("# deps\nrequests>=2.31\nhttpx==0.28.1\nclick\n")
+
+    ok, msg = _remove_from_requirements(req, "httpx")
+    assert ok is True
+    assert "httpx" in msg
+
+    content = req.read_text()
+    assert "httpx" not in content
+    assert "requests>=2.31" in content
+    assert "click" in content
+    assert "# deps" in content  # comments preserved
+
+
+def test_remove_from_requirements_missing_pkg(tmp_path: Path):
+    """Removing a non-existent package returns failure without modifying the file."""
+    from app import _remove_from_requirements
+
+    req = tmp_path / "requirements.txt"
+    original = "requests>=2.31\nclick\n"
+    req.write_text(original)
+
+    ok, msg = _remove_from_requirements(req, "flask")
+    assert ok is False
+    assert "not found" in msg.lower()
+
+    # File should be unchanged
+    assert req.read_text() == original
+
+
+def test_remove_from_requirements_missing_file(tmp_path: Path):
+    """Removing from a non-existent file returns failure."""
+    from app import _remove_from_requirements
+
+    ok, msg = _remove_from_requirements(tmp_path / "requirements.txt", "requests")
+    assert ok is False
+    assert "not found" in msg.lower()
+
+
+def test_remove_from_setup_cfg(tmp_path: Path):
+    """Remove a package from setup.cfg [options].install_requires."""
+    from app import _remove_from_setup_cfg
+
+    cfg_path = tmp_path / "setup.cfg"
+    cfg_path.write_text(_SETUP_CFG)
+
+    ok, msg = _remove_from_setup_cfg(cfg_path, "click")
+    assert ok is True
+    assert "click" in msg
+
+    # Re-parse to verify
+    import configparser
+
+    cfg = configparser.ConfigParser()
+    cfg.read(str(cfg_path))
+    raw = cfg.get("options", "install_requires", fallback="")
+    remaining = [l.strip() for l in raw.strip().splitlines() if l.strip()]
+    names = [l.split(">")[0].split("=")[0].split("<")[0].strip() for l in remaining]
+    assert "click" not in names
+    assert "requests" in names
+    assert "boto3" in names
+
+
+def test_remove_from_setup_cfg_missing_pkg(tmp_path: Path):
+    """Removing a non-existent package from setup.cfg returns failure."""
+    from app import _remove_from_setup_cfg
+
+    cfg_path = tmp_path / "setup.cfg"
+    cfg_path.write_text(_SETUP_CFG)
+
+    ok, msg = _remove_from_setup_cfg(cfg_path, "flask")
+    assert ok is False
+    assert "not found" in msg.lower()
+
+
+def test_remove_from_pipfile(tmp_path: Path):
+    """Remove a package from Pipfile [packages]."""
+    from app import _remove_from_pipfile
+
+    pf = tmp_path / "Pipfile"
+    pf.write_text(_PIPFILE)
+
+    ok, msg = _remove_from_pipfile(pf, "requests")
+    assert ok is True
+    assert "requests" in msg
+
+    content = pf.read_text()
+    assert "requests" not in content
+    assert "httpx" in content
+    assert "pytest" in content  # dev-packages preserved
+
+
+def test_remove_from_pipfile_dev(tmp_path: Path):
+    """Remove a dev package from Pipfile [dev-packages]."""
+    from app import _remove_from_pipfile
+
+    pf = tmp_path / "Pipfile"
+    pf.write_text(_PIPFILE)
+
+    ok, msg = _remove_from_pipfile(pf, "pytest")
+    assert ok is True
+
+    content = pf.read_text()
+    assert "pytest" not in content
+    assert "requests" in content  # packages preserved
+    assert "httpx" in content
+
+
+def test_remove_from_pipfile_missing_pkg(tmp_path: Path):
+    """Removing a non-existent package from Pipfile returns failure."""
+    from app import _remove_from_pipfile
+
+    pf = tmp_path / "Pipfile"
+    pf.write_text(_PIPFILE)
+
+    ok, msg = _remove_from_pipfile(pf, "flask")
+    assert ok is False
+    assert "not found" in msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# 13. Source-aware deletion flow
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def app_multi_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """App with a package appearing in both pyproject.toml and requirements.txt."""
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_UVLOCK)
+    # requirements.txt also has requests, creating a multi-source package
+    (tmp_path / "requirements.txt").write_text("requests>=2.0\n")
+    monkeypatch.chdir(tmp_path)
+
+    from app import DependencyManagerApp
+
+    return DependencyManagerApp()
+
+
+@pytest.mark.asyncio
+async def test_multi_source_delete_opens_source_select(app_multi_source):
+    """d on a multi-source package opens SourceSelectModal instead of ConfirmModal."""
+    from textual.widgets import DataTable
+
+    async with app_multi_source.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        table = app_multi_source.query_one("#dep-table", DataTable)
+        table.focus()
+        await pilot.pause()
+
+        # Navigate to "requests" which should have 2+ sources
+        # Find the row for "requests"
+        for i in range(table.row_count):
+            table.move_cursor(row=i, animate=False)
+            await pilot.pause()
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+            if row_key.value == "requests":
+                break
+
+        await pilot.press("d")
+        await pilot.pause()
+
+        # SourceSelectModal should be showing (not ConfirmModal directly)
+        source_dialog = app_multi_source.screen.query_one("#source-select-dialog")
+        assert source_dialog is not None
+
+
+@pytest.mark.asyncio
+async def test_source_select_modal_escape_cancels(app_multi_source):
+    """Escape in SourceSelectModal dismisses without removal."""
+    from textual.widgets import DataTable
+
+    async with app_multi_source.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        table = app_multi_source.query_one("#dep-table", DataTable)
+        table.focus()
+        await pilot.pause()
+
+        # Navigate to "requests"
+        for i in range(table.row_count):
+            table.move_cursor(row=i, animate=False)
+            await pilot.pause()
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+            if row_key.value == "requests":
+                break
+
+        initial_row_count = table.row_count
+
+        await pilot.press("d")
+        await pilot.pause()
+
+        # Escape should dismiss the modal
+        await pilot.press("escape")
+        await pilot.pause()
+
+        # Should be back to the main screen, table unchanged
+        assert table.row_count == initial_row_count
+
+
+@pytest.mark.asyncio
+async def test_source_select_modal_enter_opens_confirm(app_multi_source):
+    """Selecting a source in SourceSelectModal proceeds to ConfirmModal."""
+    from textual.widgets import DataTable
+
+    async with app_multi_source.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        table = app_multi_source.query_one("#dep-table", DataTable)
+        table.focus()
+        await pilot.pause()
+
+        # Navigate to "requests"
+        for i in range(table.row_count):
+            table.move_cursor(row=i, animate=False)
+            await pilot.pause()
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+            if row_key.value == "requests":
+                break
+
+        await pilot.press("d")
+        await pilot.pause()
+
+        # Press Enter to select the first source
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # Now a ConfirmModal should appear
+        confirm_dialog = app_multi_source.screen.query_one("#confirm-dialog")
+        assert confirm_dialog is not None
+
+        title = app_multi_source.screen.query_one("#confirm-title")
+        assert "Delete" in str(title.render())
+
+
+@pytest.mark.asyncio
+async def test_single_source_delete_skips_source_select(app_with_deps):
+    """d on a single-source package goes directly to ConfirmModal."""
+    from textual.widgets import DataTable
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        table = app_with_deps.query_one("#dep-table", DataTable)
+        table.focus()
+        await pilot.pause()
+
+        await pilot.press("d")
+        await pilot.pause()
+
+        # Should be ConfirmModal directly (no SourceSelectModal)
+        confirm_dialog = app_with_deps.screen.query_one("#confirm-dialog")
+        assert confirm_dialog is not None
+
+        # Verify the message mentions the source file
+        message = app_with_deps.screen.query_one("#confirm-message")
+        rendered = str(message.render())
+        assert "pyproject.toml" in rendered or "Remove" in rendered

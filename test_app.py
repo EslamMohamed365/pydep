@@ -785,7 +785,7 @@ async def test_delete_confirm_opens(app_with_deps):
         table.focus()
         await pilot.pause()
 
-        await pilot.press("x")
+        await pilot.press("d")
         await pilot.pause()
 
         confirm_dialog = app_with_deps.screen.query_one("#confirm-dialog")

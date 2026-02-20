@@ -15,7 +15,7 @@ Features
 * Async PyPI validation before any install/update; defaults to the latest
   version when the user leaves the version field blank.
 * Vim-style navigation: ``j``/``k``, ``gg``, ``G``, ``/`` search,
-  ``x`` delete, and more.
+  ``d`` delete, and more.
 * Tokyo Night themed via Textual CSS.
 
 Usage::
@@ -620,7 +620,7 @@ _HELP_TEXT = """\
   [#9ece6a]/[/]               Enter search mode
   [#9ece6a]a[/]               Add package
   [#9ece6a]u[/]               Update selected package
-  [#9ece6a]x[/]               Delete selected package
+  [#9ece6a]d[/]               Delete selected package
   [#9ece6a]r[/]               Refresh list
   [#9ece6a]i[/]               Init project  (uv init)
   [#9ece6a]?[/]               Toggle this help
@@ -675,7 +675,7 @@ class DependencyManagerApp(App):
     BINDINGS = [
         Binding("a", "add_package", "Add", priority=True),
         Binding("u", "update_package", "Update", priority=True),
-        Binding("x", "delete_package", "Delete", priority=True),
+        Binding("d", "delete_package", "Delete", priority=True),
         Binding("r", "refresh", "Refresh", priority=True),
         Binding("slash", "focus_search", "/Search", priority=True),
         Binding("i", "init_project", "Init", priority=True),

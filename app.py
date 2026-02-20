@@ -34,6 +34,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
+import ast
+import configparser
+import glob as glob_mod
+
 import httpx
 from rich.text import Text
 from textual import events, work
@@ -66,12 +70,20 @@ except ModuleNotFoundError:
 
 
 @dataclass
+class DepSource:
+    """One place where a dependency was declared or found."""
+
+    file: str  # e.g. "pyproject.toml", "requirements-dev.txt", "venv"
+    specifier: str  # e.g. ">=2.31", "==8.1.7", "*"
+
+
+@dataclass
 class Package:
-    """A single dependency entry."""
+    """A dependency aggregated across all discovered sources."""
 
     name: str
-    specifier: str  # raw constraint from pyproject.toml  e.g. ">=2.31"
-    locked_version: str  # resolved version from uv.lock   e.g. "2.32.5"
+    sources: list[DepSource]  # every file/env that mentions this package
+    installed_version: str  # from uv.lock or venv (resolved version)
 
 
 # =============================================================================
@@ -129,7 +141,7 @@ class PackageManager:
 
 
 # =============================================================================
-# Dependency Parsing  (pyproject.toml + uv.lock)
+# Dependency Parsing  (multi-source scanner)
 # =============================================================================
 
 _DEP_RE = re.compile(
@@ -137,6 +149,24 @@ _DEP_RE = re.compile(
     r"(?:\[.*?\])?"  # optional extras
     r"\s*(?P<spec>(?:[><=!~]+\s*[A-Za-z0-9.*+!_-]+\s*,?\s*)*)"
 )
+
+
+def _normalise(name: str) -> str:
+    """PEP 503 normalisation (lowercase, hyphens/underscores/dots -> -)."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _parse_dep_string(raw: str) -> tuple[str, str] | None:
+    """Extract ``(name, specifier)`` from a PEP 508 dependency string."""
+    m = _DEP_RE.match(raw)
+    if not m:
+        return None
+    name = m.group("name")
+    spec = m.group("spec").strip() or "*"
+    return name, spec
+
+
+# -- uv.lock parser (unchanged) ----------------------------------------------
 
 
 def _parse_lock(lock_path: Path) -> dict[str, str]:
@@ -160,42 +190,244 @@ def _parse_lock(lock_path: Path) -> dict[str, str]:
     return result
 
 
-def _normalise(name: str) -> str:
-    """PEP 503 normalisation (lowercase, hyphens/underscores/dots -> -)."""
-    return re.sub(r"[-_.]+", "-", name).lower()
+# -- Sub-parsers --------------------------------------------------------------
+# Each returns list[tuple[str, str, str]] = [(raw_name, specifier, source_label)]
 
 
-def load_dependencies() -> list[Package]:
-    """Read ``[project].dependencies`` and cross-reference ``uv.lock``.
-
-    Returns an empty list when no ``pyproject.toml`` is present.
-    """
-    cwd = Path.cwd()
-    toml_path = cwd / "pyproject.toml"
-
-    if not toml_path.is_file() or tomllib is None:
+def _parse_pyproject(path: Path) -> list[tuple[str, str, str]]:
+    """Parse ``[project].dependencies`` and ``[project].optional-dependencies``."""
+    if not path.is_file() or tomllib is None:
         return []
-
     try:
-        with open(toml_path, "rb") as fh:
+        with open(path, "rb") as fh:
             data = tomllib.load(fh)
     except Exception:
         return []
+    results: list[tuple[str, str, str]] = []
+    label = path.name  # "pyproject.toml"
 
-    raw_deps: list[str] = data.get("project", {}).get("dependencies", [])
-    lock_map = _parse_lock(cwd / "uv.lock")
+    # [project].dependencies
+    for raw in data.get("project", {}).get("dependencies", []):
+        parsed = _parse_dep_string(raw)
+        if parsed:
+            results.append((parsed[0], parsed[1], label))
 
-    packages: list[Package] = []
-    for dep in raw_deps:
-        m = _DEP_RE.match(dep)
-        if not m:
+    # [project].optional-dependencies.*
+    opt_deps = data.get("project", {}).get("optional-dependencies", {})
+    for group_name, deps in opt_deps.items():
+        group_label = f"{label} [{group_name}]"
+        for raw in deps:
+            parsed = _parse_dep_string(raw)
+            if parsed:
+                results.append((parsed[0], parsed[1], group_label))
+
+    return results
+
+
+def _parse_requirements(path: Path) -> list[tuple[str, str, str]]:
+    """Parse a ``requirements.txt``-style file (line-by-line)."""
+    if not path.is_file():
+        return []
+    results: list[tuple[str, str, str]] = []
+    label = path.name
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return []
+    for line in lines:
+        line = line.strip()
+        # skip blank, comments, flags (-r, -e, --index-url, etc.)
+        if not line or line.startswith("#") or line.startswith("-"):
             continue
-        name = m.group("name")
-        spec = m.group("spec").strip() or "*"
-        locked = lock_map.get(_normalise(name), "")
-        packages.append(Package(name=name, specifier=spec, locked_version=locked))
+        parsed = _parse_dep_string(line)
+        if parsed:
+            results.append((parsed[0], parsed[1], label))
+    return results
 
-    return packages
+
+def _parse_setup_py(path: Path) -> list[tuple[str, str, str]]:
+    """Extract ``install_requires`` from a ``setup.py`` using AST.
+
+    This is best-effort -- it only handles literal lists, not dynamic code.
+    """
+    if not path.is_file():
+        return []
+    try:
+        source = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return []
+
+    results: list[tuple[str, str, str]] = []
+    label = "setup.py"
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    for node in ast.walk(tree):
+        # Look for setup(..., install_requires=[...], ...)
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg != "install_requires":
+                continue
+            # Try to literal_eval the value
+            try:
+                deps = ast.literal_eval(kw.value)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(deps, (list, tuple)):
+                for raw in deps:
+                    if isinstance(raw, str):
+                        parsed = _parse_dep_string(raw)
+                        if parsed:
+                            results.append((parsed[0], parsed[1], label))
+    return results
+
+
+def _parse_setup_cfg(path: Path) -> list[tuple[str, str, str]]:
+    """Parse ``[options].install_requires`` from ``setup.cfg``."""
+    if not path.is_file():
+        return []
+    results: list[tuple[str, str, str]] = []
+    label = "setup.cfg"
+    try:
+        cfg = configparser.ConfigParser()
+        cfg.read(str(path), encoding="utf-8")
+    except Exception:
+        return []
+    raw = cfg.get("options", "install_requires", fallback="")
+    for line in raw.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parsed = _parse_dep_string(line)
+        if parsed:
+            results.append((parsed[0], parsed[1], label))
+    return results
+
+
+def _parse_pipfile(path: Path) -> list[tuple[str, str, str]]:
+    """Parse ``[packages]`` and ``[dev-packages]`` from a ``Pipfile``."""
+    if not path.is_file() or tomllib is None:
+        return []
+    try:
+        with open(path, "rb") as fh:
+            data = tomllib.load(fh)
+    except Exception:
+        return []
+    results: list[tuple[str, str, str]] = []
+    for section in ("packages", "dev-packages"):
+        pkgs = data.get(section, {})
+        if not isinstance(pkgs, dict):
+            continue
+        for name, ver in pkgs.items():
+            if isinstance(ver, str):
+                spec = ver if ver != "*" else "*"
+            elif isinstance(ver, dict):
+                spec = ver.get("version", "*")
+            else:
+                spec = "*"
+            results.append((name, spec, "Pipfile"))
+    return results
+
+
+async def _parse_installed(uv_path: str | None) -> list[tuple[str, str, str]]:
+    """Get packages installed in the active venv via ``uv pip list``.
+
+    Returns ``[(name, "==version", "venv"), ...]``.
+    """
+    if uv_path is None:
+        return []
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            uv_path,
+            "pip",
+            "list",
+            "--format",
+            "json",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            return []
+        packages = json.loads(stdout.decode())
+    except Exception:
+        return []
+    results: list[tuple[str, str, str]] = []
+    for pkg in packages:
+        name = pkg.get("name", "")
+        version = pkg.get("version", "")
+        if name and version:
+            results.append((name, f"=={version}", "venv"))
+    return results
+
+
+# -- Aggregation --------------------------------------------------------------
+
+
+def load_dependencies(
+    installed: list[tuple[str, str, str]] | None = None,
+) -> list[Package]:
+    """Scan all dependency sources in CWD and merge by normalised name.
+
+    *installed* is an optional pre-fetched list from ``_parse_installed``
+    (since that requires async).  Pass ``None`` to skip venv scanning.
+
+    Returns a sorted list of :class:`Package` objects.
+    """
+    cwd = Path.cwd()
+    raw: list[tuple[str, str, str]] = []
+
+    # 1. pyproject.toml
+    raw.extend(_parse_pyproject(cwd / "pyproject.toml"))
+
+    # 2. requirements*.txt  (glob)
+    for req_path in sorted(cwd.glob("requirements*.txt")):
+        raw.extend(_parse_requirements(req_path))
+
+    # 3. setup.py
+    raw.extend(_parse_setup_py(cwd / "setup.py"))
+
+    # 4. setup.cfg
+    raw.extend(_parse_setup_cfg(cwd / "setup.cfg"))
+
+    # 5. Pipfile
+    raw.extend(_parse_pipfile(cwd / "Pipfile"))
+
+    # 6. Installed (pre-fetched, async)
+    if installed:
+        raw.extend(installed)
+
+    # Merge by normalised name
+    lock_map = _parse_lock(cwd / "uv.lock")
+    merged: dict[str, Package] = {}
+
+    for name, spec, source_label in raw:
+        key = _normalise(name)
+        if key not in merged:
+            merged[key] = Package(
+                name=name,
+                sources=[],
+                installed_version=lock_map.get(key, ""),
+            )
+        pkg = merged[key]
+        # Avoid duplicate source entries (same file + same specifier)
+        dup = any(s.file == source_label and s.specifier == spec for s in pkg.sources)
+        if not dup:
+            pkg.sources.append(DepSource(file=source_label, specifier=spec))
+        # If this source is "venv" and we don't have an installed version yet,
+        # extract it from the ==version specifier.
+        if (
+            source_label == "venv"
+            and not pkg.installed_version
+            and spec.startswith("==")
+        ):
+            pkg.installed_version = spec[2:]
+
+    return sorted(merged.values(), key=lambda p: p.name.lower())
 
 
 # =============================================================================
@@ -577,14 +809,24 @@ class DependencyManagerApp(App):
 
     @work(exclusive=True, group="refresh")
     async def _refresh_data(self) -> None:
-        self._set_info("Loading...")
+        self._set_info("Scanning sources...")
         try:
-            self._packages = load_dependencies()
+            # Fetch installed packages asynchronously
+            installed = await _parse_installed(self.pkg_mgr._uv)
+            self._packages = load_dependencies(installed=installed)
         except Exception as exc:
             self.notify(f"Failed to load: {exc}", severity="error")
             self._packages = []
         self._repopulate_table()
-        self._set_info(f"{len(self._packages)} deps  |  uv project")
+        # Count distinct source files
+        all_sources = set()
+        for pkg in self._packages:
+            for s in pkg.sources:
+                all_sources.add(s.file)
+        n_sources = len(all_sources)
+        self._set_info(
+            f"{len(self._packages)} packages  |  {n_sources} source{'s' if n_sources != 1 else ''}"
+        )
 
     def _repopulate_table(self) -> None:
         table = self.query_one("#dep-table", DataTable)

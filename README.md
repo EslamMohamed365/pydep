@@ -22,7 +22,7 @@ SetEnv scans your project for dependencies across multiple sources — `pyprojec
 ## Installation
 
 ```bash
-git clone https://github.com/<your-username>/setenv.git
+git clone https://github.com/EslamMohamed365/setenv.git
 cd setenv
 uv sync
 ```

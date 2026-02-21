@@ -1965,7 +1965,6 @@ async def test_search_pypi_modal_escape_closes(app_with_deps):
         assert not isinstance(app_with_deps.screen, SearchPyPIModal)
 
 
-@pytest.mark.asyncio
 # ---------------------------------------------------------------------------
 # 23. Package documentation viewer (D key)
 # ---------------------------------------------------------------------------

@@ -1,17 +1,10 @@
 <div align="center">
 
-```
-██████╗ ██╗   ██╗██████╗ ███████╗██████╗
-██╔══██╗╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗
-██████╔╝ ╚████╔╝ ██║  ██║█████╗  ██████╔╝
-██╔═══╝   ╚██╔╝  ██║  ██║██╔══╝  ██╔═══╝
-██║        ██║   ██████╔╝███████╗██║
-╚═╝        ╚═╝   ╚═════╝ ╚══════╝╚═╝
-```
+<h1>PyDep</h1>
 
-**A fully keyboard-driven terminal UI for Python dependency management**
+<p><strong>A fully keyboard-driven terminal UI for Python dependency management</strong></p>
 
-*lazygit-style panels · Vim keybindings · Tokyo Night theme · powered by uv*
+<p><em>lazygit-style panels &nbsp;·&nbsp; Vim keybindings &nbsp;·&nbsp; Tokyo Night theme &nbsp;·&nbsp; powered by uv</em></p>
 
 <br>
 
@@ -21,11 +14,7 @@
 [![Textual](https://img.shields.io/badge/built%20with-Textual-purple?style=flat-square&color=bb9af7)](https://textual.textualize.io/)
 [![Tests](https://img.shields.io/badge/tests-109%20passing-brightgreen?style=flat-square&color=9ece6a)](test_app.py)
 
-</div>
-
----
-
-<div align="center">
+<br>
 
 ![PyDep Demo](demo.gif)
 
@@ -38,6 +27,52 @@
 PyDep scans your project for dependencies across **6 sources** — `pyproject.toml`, `requirements.txt`, `setup.py`, `setup.cfg`, `Pipfile`, and your virtual environment — and presents them in a unified, lazygit-inspired multi-panel interface.
 
 No mouse. No menus. Just your keyboard, Vim motions, and instant access to everything.
+
+**Why PyDep instead of running `uv` commands manually?**
+
+- **See everything at once** — all sources, versions, and outdated status in a single view, no grepping through files
+- **Discover & install in seconds** — fuzzy-search PyPI, browse results with <kbd>j</kbd>/<kbd>k</kbd>, and install without leaving the terminal
+- **Works with any project layout** — understands `pyproject.toml`, `requirements*.txt`, `setup.py`, `setup.cfg`, `Pipfile`, and installed packages simultaneously
+
+---
+
+## ✦ Requirements
+
+- **Python 3.13+**
+- **[uv](https://docs.astral.sh/uv/)** on your `PATH` — install with `curl -LsSf https://astral.sh/uv/install.sh | sh`
+
+---
+
+## ✦ Quick Start
+
+```bash
+# 1. Clone
+git clone https://github.com/EslamMohamed365/pydep.git
+cd pydep
+
+# 2. Install dependencies
+uv sync
+
+# 3. Run (from your project directory)
+uv run python /path/to/pydep/app.py
+```
+
+> Run `app.py` from **your project's directory** so PyDep can find its dependency files. If no `pyproject.toml` exists, PyDep will offer to run `uv init --bare` for you.
+
+---
+
+## ✦ Common Tasks
+
+| Task | How |
+|------|-----|
+| **Add a package** | Press <kbd>a</kbd>, type the name and optional version, confirm |
+| **Search & install from PyPI** | Press <kbd>p</kbd>, type a query, navigate with <kbd>j</kbd>/<kbd>k</kbd>, press <kbd>Enter</kbd> |
+| **Find outdated packages** | Press <kbd>o</kbd> — green = current, yellow = outdated |
+| **Update all outdated** | Press <kbd>U</kbd> after running the outdated check |
+| **Remove a package** | Press <kbd>d</kbd> — multi-source packages prompt which source |
+| **Filter the package list** | Press <kbd>/</kbd>, start typing — live filter by name |
+| **Open package docs** | Press <kbd>D</kbd> — opens the PyPI page in your browser |
+| **Sync your environment** | Press <kbd>s</kbd> — runs `uv sync` |
 
 ---
 
@@ -73,22 +108,6 @@ No mouse. No menus. Just your keyboard, Vim motions, and instant access to every
 - **Venv creation** — Press <kbd>v</kbd> to create `.venv` via `uv venv`
 - **Auto-init** — If no `pyproject.toml` exists, PyDep offers to run `uv init --bare`
 - **Loading indicators** — Visual feedback during every async operation
-
----
-
-## ✦ Quick Start
-
-```bash
-# 1. Clone
-git clone https://github.com/EslamMohamed365/pydep.git
-cd pydep
-
-# 2. Install dependencies
-uv sync
-
-# 3. Run
-uv run python app.py
-```
 
 ---
 
@@ -214,10 +233,13 @@ uv run pytest test_app.py -v
 
 ---
 
-## ✦ Requirements
+## ✦ Troubleshooting
 
-- **Python 3.13+**
-- **[uv](https://docs.astral.sh/uv/)** on your `PATH`
+**`uv: command not found`** — Install uv: `curl -LsSf https://astral.sh/uv/install.sh | sh`, then restart your shell.
+
+**No packages shown** — Make sure you're running `app.py` from your project directory (the one containing `pyproject.toml` or `requirements.txt`), not from the `pydep/` clone directory.
+
+**PyPI search returns no results** — The first search builds a local index of ~500k package names from PyPI's Simple API. This takes a few seconds on first run and is cached at `~/.cache/pydep/pypi_index.json` for 24 hours. Check your internet connection if it hangs.
 
 ---
 

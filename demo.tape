@@ -1,124 +1,101 @@
 # PyDep Demo
-# Animated demo of the PyDep TUI dependency manager
+# Cinematic walkthrough of the PyDep TUI dependency manager
 
 Output demo.gif
 
 Set Shell "bash"
-Set FontSize 14
-Set Width 1200
-Set Height 600
+Set FontSize 13
+Set Width 1400
+Set Height 750
 Set Theme "TokyoNight"
-Set Padding 10
-Set TypingSpeed 80ms
+Set Padding 16
+Set TypingSpeed 60ms
 Set PlaybackSpeed 1
+Set CursorBlink false
 
-# Launch PyDep
+# ── Launch ──────────────────────────────────────────────────────
 Type "uv run python app.py"
 Enter
-Sleep 3s
+Sleep 4s
 
-# Panel navigation with Tab
-Sleep 1s
-Tab
-Sleep 600ms
-Tab
-Sleep 600ms
-Tab
-Sleep 600ms
-
-# Jump to panels with number keys
+# ── Panel navigation with number keys ───────────────────────────
+Sleep 800ms
 Type "1"
-Sleep 500ms
+Sleep 600ms
 Type "2"
-Sleep 500ms
+Sleep 600ms
 Type "3"
-Sleep 500ms
+Sleep 800ms
 
-# Navigate packages with Vim motions
+# ── Vim navigation in Packages ──────────────────────────────────
 Type "j"
-Sleep 400ms
+Sleep 350ms
 Type "j"
-Sleep 400ms
+Sleep 350ms
 Type "j"
-Sleep 400ms
-Type "k"
-Sleep 400ms
+Sleep 350ms
+Type "j"
+Sleep 350ms
+Type "j"
+Sleep 350ms
 
-# Jump to bottom with G
+# Jump to bottom
 Type "G"
-Sleep 1s
+Sleep 900ms
 
-# Jump to top with gg
+# Jump to top
 Type "gg"
-Sleep 1s
+Sleep 900ms
 
-# Switch to sources panel and navigate
+# ── Source filtering ─────────────────────────────────────────────
 Type "2"
-Sleep 500ms
-Type "j"
-Sleep 400ms
+Sleep 600ms
 Type "j"
 Sleep 400ms
 Enter
-Sleep 1s
+Sleep 1200ms
 
 # Back to all sources
 Type "gg"
 Sleep 400ms
 Enter
-Sleep 1s
+Sleep 800ms
 
-# Filter mode
+# ── Filter mode ──────────────────────────────────────────────────
 Type "3"
-Sleep 500ms
+Sleep 600ms
 Type "/"
 Sleep 500ms
-Type "httpx"
-Sleep 1.5s
-
-# Close filter keeping text
-Enter
-Sleep 500ms
-
-# Clear filter
-Type "/"
-Sleep 300ms
+Type "textual"
+Sleep 1200ms
 Escape
-Sleep 1s
+Sleep 800ms
 
-# Check outdated packages
-Type "o"
-Sleep 5s
-
-# Sync project
-Type "s"
-Sleep 3s
-
-# Search PyPI for a package
+# ── PyPI search ──────────────────────────────────────────────────
 Type "p"
 Sleep 1s
-Type "flask"
-Sleep 2s
+Type "requests"
+Enter
+Sleep 4s
+Type "j"
+Sleep 400ms
 Type "j"
 Sleep 400ms
 Type "j"
 Sleep 400ms
 Escape
-Sleep 1s
+Sleep 900ms
 
-# Update all outdated packages
-Type "U"
-Sleep 1s
-# Dismiss confirmation (press n to skip in demo)
-Type "n"
-Sleep 1s
+# ── Check outdated ───────────────────────────────────────────────
+Type "o"
+Sleep 7s
 
-# Open help
+# ── Help overlay ─────────────────────────────────────────────────
 Type "?"
-Sleep 2s
+Sleep 2500ms
 Escape
-Sleep 1s
+Sleep 800ms
 
-# Quit
+# ── Quit ─────────────────────────────────────────────────────────
 Type "q"
-Sleep 1s
+Sleep 800ms

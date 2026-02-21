@@ -40,7 +40,7 @@ from typing import Any, ClassVar
 import ast
 import configparser
 
-import httpx
+import requests
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -560,81 +560,49 @@ def _remove_from_pipfile(path: Path, pkg_name: str) -> tuple[bool, str]:
 # =============================================================================
 
 
-async def validate_pypi(
-    name: str,
-    version: str | None = None,
-) -> tuple[bool, str | None, str | None]:
-    """Check a package (+ optional version) against the PyPI JSON API.
-
-    Returns ``(is_valid, error_message, resolved_version)``.
-    When *version* is ``None`` the latest release is resolved automatically.
-    """
+async def _get_pypi_json(name: str) -> dict[str, Any] | None:
+    """Fetch ``/pypi/<name>/json`` from PyPI. Returns parsed JSON or ``None``."""
     url = f"https://pypi.org/pypi/{name}/json"
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url)
-    except httpx.HTTPError as exc:
-        return False, f"Network error: {exc}", None
+        resp = await asyncio.to_thread(requests.get, url, timeout=(3.05, 10))
+        if resp.status_code == 200:
+            return resp.json()
+        return None
+    except requests.RequestException:
+        return None
 
-    if resp.status_code == 404:
-        return False, f"Package '{name}' not found on PyPI.", None
-    if resp.status_code != 200:
-        return False, f"PyPI returned HTTP {resp.status_code}.", None
 
-    try:
-        data = resp.json()
-    except Exception:
-        return False, "Failed to parse PyPI response.", None
-
-    latest: str = data.get("info", {}).get("version", "")
-    releases: dict[str, Any] = data.get("releases", {})
-
+async def validate_pypi(
+    name: str, version: str | None = None
+) -> tuple[bool, str | None, str | None]:
+    """Check whether *name* (and optional *version*) exists on PyPI."""
+    data = await _get_pypi_json(name)
+    if data is None:
+        return False, f"Package '{name}' not found on PyPI", None
+    info = data.get("info", {})
+    latest = info.get("version")
     if version:
-        if version in releases:
-            return True, None, version
-        return (
-            False,
-            f"Version '{version}' not found for '{name}'. Latest: {latest}",
-            latest,
-        )
-
+        releases = data.get("releases", {})
+        if version not in releases:
+            return False, f"Version {version} not found for '{name}'", latest
     return True, None, latest
 
 
 async def _fetch_latest_versions(
     packages: list[str],
-) -> tuple[dict[str, str], int]:
-    """Batch-query PyPI for the latest version of each package.
-
-    Queries up to 10 packages concurrently to avoid overwhelming PyPI.
-
-    Returns ``(latest_versions_map, failure_count)`` where the map is
-    ``{normalised_name: latest_version}``.
-    """
+) -> dict[str, str | None]:
+    """Fetch latest PyPI versions for *packages* concurrently."""
     sem = asyncio.Semaphore(10)
-    results: dict[str, str] = {}
-    failures = 0
 
-    async def _fetch_one(client: httpx.AsyncClient, name: str) -> None:
-        nonlocal failures
+    async def _fetch_one(name: str) -> tuple[str, str | None]:
         async with sem:
-            try:
-                resp = await client.get(f"https://pypi.org/pypi/{name}/json")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    latest = data.get("info", {}).get("version", "")
-                    if latest:
-                        results[_normalise(name)] = latest
-                else:
-                    failures += 1
-            except Exception:
-                failures += 1
+            data = await _get_pypi_json(name)
+            if data is None:
+                return name, None
+            return name, data.get("info", {}).get("version")
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        tasks = [_fetch_one(client, name) for name in packages]
-        await asyncio.gather(*tasks)
-
-    return results, failures
+    results = await asyncio.gather(*[_fetch_one(p) for p in packages])
+    return dict(results)
 
 
 # =============================================================================
@@ -649,6 +617,8 @@ def _get_python_version() -> str:
 
 def _get_app_version() -> str:
     """Read version from ``pyproject.toml``."""
+    if tomllib is None:
+        return "0.0.0"
     try:
         pyproject = Path(__file__).parent / "pyproject.toml"
         if pyproject.exists():
@@ -1030,7 +1000,7 @@ class DetailsPanel(PanelWidget):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(title="Details", id="details-panel", **kwargs)
-        self.can_focus = False  # not navigable
+        self.can_focus = True
 
     def on_mount(self) -> None:
         self.border_title = "Details"
@@ -1389,7 +1359,7 @@ class UpdatePackageModal(PackageModal):
 
 _HELP_TEXT = """\
 [b #7aa2f7]NAVIGATION[/]
-  [#9ece6a]Tab[/]             Cycle panel focus
+  [#9ece6a]Tab[/]             Cycle panels (Status, Sources, Packages, Details)
   [#9ece6a]Shift+Tab[/]       Previous panel
   [#9ece6a]1[/] / [#9ece6a]2[/] / [#9ece6a]3[/]       Jump to Status / Sources / Packages
   [#9ece6a]j[/] / [#9ece6a]k[/]           Move down / up
@@ -1581,38 +1551,20 @@ class SearchPyPIModal(ModalScreen[str | None]):
         self._render_results()
 
     async def _search_pypi(self, query: str) -> list[tuple[str, str, str]]:
-        """Search PyPI. Returns ``[(name, version, description), ...]``."""
+        """Search PyPI by exact name via JSON API."""
+        url = f"https://pypi.org/pypi/{query}/json"
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    f"https://pypi.org/search/?q={query}",
-                    follow_redirects=True,
-                    timeout=10.0,
-                )
-                if resp.status_code == 200:
-                    return self._parse_search_html(resp.text)
+            resp = await asyncio.to_thread(requests.get, url, timeout=(3.05, 10))
+            if resp.status_code != 200:
+                return []
+            data = resp.json()
+            info = data.get("info", {})
+            name = info.get("name", query)
+            version = info.get("version", "")
+            summary = info.get("summary", "")
+            return [(name, version, summary)]
         except Exception:
-            pass
-        return []
-
-    @staticmethod
-    def _parse_search_html(html: str) -> list[tuple[str, str, str]]:
-        """Extract package info from PyPI search results HTML."""
-        names = re.findall(r'class="package-snippet__name"[^>]*>([^<]+)<', html)
-        versions = re.findall(r'class="package-snippet__version"[^>]*>([^<]+)<', html)
-        descriptions = re.findall(
-            r'class="package-snippet__description"[^>]*>([^<]+)<', html
-        )
-        results: list[tuple[str, str, str]] = []
-        for i in range(min(len(names), len(versions), len(descriptions))):
-            results.append(
-                (
-                    names[i].strip(),
-                    versions[i].strip(),
-                    descriptions[i].strip(),
-                )
-            )
-        return results
+            return []
 
     def _render_results(self) -> None:
         """Render the results list with highlighted selection."""
@@ -1710,10 +1662,12 @@ class DependencyManagerApp(App):
         self._pending_g_time: float = 0.0
         # Panel list for Tab cycling (only navigable panels)
         self._panel_ids: list[str] = [
+            "status-panel",
             "sources-panel",
             "packages-panel",
+            "details-panel",
         ]
-        self._current_panel_idx: int = 1  # start on packages
+        self._current_panel_idx: int = 2  # start on packages
 
     # -- helpers ---------------------------------------------------------------
 
@@ -1765,7 +1719,7 @@ class DependencyManagerApp(App):
         # Focus the packages panel
         pkg_panel = self.query_one("#packages-panel", PackagesPanel)
         pkg_panel.focus()
-        self._current_panel_idx = 1
+        self._current_panel_idx = 2
         self._update_hint_bar()
 
         toml_path = Path.cwd() / "pyproject.toml"
@@ -1800,7 +1754,7 @@ class DependencyManagerApp(App):
                 pkg_panel.set_text_filter("")
                 pkg_panel.filter_active = False
                 pkg_panel.focus()
-                self._current_panel_idx = 1
+                self._current_panel_idx = 2
                 self._update_details_for_selection()
                 self._update_hint_bar()
                 return
@@ -1812,7 +1766,7 @@ class DependencyManagerApp(App):
                 pkg_panel = self.query_one("#packages-panel", PackagesPanel)
                 pkg_panel.filter_active = False
                 pkg_panel.focus()
-                self._current_panel_idx = 1
+                self._current_panel_idx = 2
                 self._update_details_for_selection()
                 self._update_hint_bar()
                 return
@@ -1832,23 +1786,26 @@ class DependencyManagerApp(App):
             self._cycle_panel(-1)
             return
 
-        # --- 1/2/3: jump to panel ---
+        # --- 1/2/3/4: jump to panel ---
         if key == "1":
-            event.prevent_default()
-            event.stop()
-            # Status panel is not in the Tab cycle but still directly accessible
-            self.query_one("#status-panel").focus()
-            self._update_hint_bar()
-            return
-        if key == "2":
             event.prevent_default()
             event.stop()
             self._jump_to_panel(0)
             return
-        if key == "3":
+        if key == "2":
             event.prevent_default()
             event.stop()
             self._jump_to_panel(1)
+            return
+        if key == "3":
+            event.prevent_default()
+            event.stop()
+            self._jump_to_panel(2)
+            return
+        if key == "4":
+            event.prevent_default()
+            event.stop()
+            self._jump_to_panel(3)
             return
 
         # --- Panel-specific Vim navigation ---
@@ -2070,20 +2027,15 @@ class DependencyManagerApp(App):
                 pkg, self._latest_versions, requires=requires, summary=summary
             )
 
-    async def _fetch_pypi_metadata(self, name: str) -> dict[str, Any] | None:
-        """Fetch and cache PyPI JSON metadata for ``name``."""
+    async def _fetch_pypi_metadata(self, name: str) -> dict[str, Any]:
+        """Fetch PyPI JSON metadata with caching."""
         if name in self._pypi_cache:
             return self._pypi_cache[name]
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(f"https://pypi.org/pypi/{name}/json")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    self._pypi_cache[name] = data
-                    return data
-        except Exception:
-            pass
-        return None
+        data = await _get_pypi_json(name)
+        if data is not None:
+            self._pypi_cache[name] = data
+            return data
+        return {}
 
     def _on_source_selection_changed(self) -> None:
         """When the selected source changes, filter the packages panel."""
@@ -2128,11 +2080,16 @@ class DependencyManagerApp(App):
         names = [pkg.name for pkg in self._packages]
         self._show_loading(f"Checking {len(names)} packages for updates...")
         try:
-            self._latest_versions, failures = await _fetch_latest_versions(names)
+            latest_map = await _fetch_latest_versions(names)
         except Exception as exc:
             self._hide_loading()
             self.notify(f"Outdated check failed: {exc}", severity="error")
             return
+
+        failures = sum(1 for version in latest_map.values() if version is None)
+        self._latest_versions = {
+            _normalise(name): version or "" for name, version in latest_map.items()
+        }
 
         # Update packages panel with latest versions
         pkg_panel = self.query_one("#packages-panel", PackagesPanel)
@@ -2329,11 +2286,22 @@ class DependencyManagerApp(App):
         self.push_screen(SearchPyPIModal(), callback=self._on_search_result)
 
     def _on_search_result(self, result: str | None) -> None:
-        """Handle selected package from PyPI search."""
-        if result:
-            self.push_screen(
-                AddPackageModal(package_name=result), callback=self._on_add_result
-            )
+        """Handle search modal result — confirm before adding."""
+        if result is None:
+            return
+        self.push_screen(
+            ConfirmModal(f"Add '{result}' to project?"),
+            lambda confirmed: self._on_search_confirm(result, confirmed),
+        )
+
+    def _on_search_confirm(self, package: str, confirmed: bool) -> None:
+        """Handle search confirmation — open Add modal if confirmed."""
+        if not confirmed:
+            return
+        self.push_screen(
+            AddPackageModal(package_name=package),
+            self._on_add_result,
+        )
 
     # -- Add ------------------------------------------------------------------
 

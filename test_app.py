@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
-import httpx
+import requests
 import pytest
 
 
@@ -40,7 +40,7 @@ import pytest
 
 
 class MockResponse:
-    """Fake ``httpx.Response`` for PyPI API mocking."""
+    """Fake ``requests.Response`` for PyPI API mocking."""
 
     def __init__(
         self,
@@ -57,16 +57,15 @@ class MockResponse:
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
-            raise httpx.HTTPStatusError(
-                "",
-                request=httpx.Request("GET", ""),
+            raise requests.HTTPError(
+                f"{self.status_code}",
                 response=self,  # type: ignore[arg-type]
             )
 
 
 @pytest.fixture(autouse=True)
-def mock_httpx(monkeypatch: pytest.MonkeyPatch) -> dict[str, MockResponse]:
-    """Patch ``httpx.AsyncClient`` globally — no test ever makes real HTTP calls.
+def mock_requests(monkeypatch: pytest.MonkeyPatch) -> dict[str, MockResponse]:
+    """Patch ``requests.get`` globally — no test ever makes real HTTP calls.
 
     Tests that need specific HTTP responses can populate the returned *responses*
     dict.  Keys are substring-matched against request URLs; the first match wins.
@@ -74,23 +73,13 @@ def mock_httpx(monkeypatch: pytest.MonkeyPatch) -> dict[str, MockResponse]:
     """
     responses: dict[str, MockResponse] = {}
 
-    class MockClient:
-        def __init__(self, **kwargs: Any) -> None:
-            pass
+    def _mock_get(url: str, **kwargs: Any) -> MockResponse:
+        for pattern, resp in responses.items():
+            if pattern in url:
+                return resp
+        return MockResponse(404)
 
-        async def __aenter__(self) -> MockClient:
-            return self
-
-        async def __aexit__(self, *args: object) -> None:
-            pass
-
-        async def get(self, url: str, **kwargs: Any) -> MockResponse:
-            for pattern, resp in responses.items():
-                if pattern in url:
-                    return resp
-            return MockResponse(404)
-
-    monkeypatch.setattr(httpx, "AsyncClient", MockClient)
+    monkeypatch.setattr(requests, "get", _mock_get)
     return responses
 
 
@@ -510,11 +499,11 @@ def test_load_dependencies_with_installed(
 
 
 @pytest.mark.asyncio
-async def test_validate_pypi_latest(mock_httpx):
+async def test_validate_pypi_latest(mock_requests):
     """No version specified -> resolves to latest."""
     from app import validate_pypi
 
-    mock_httpx["pypi.org/pypi/requests/json"] = MockResponse(
+    mock_requests["pypi.org/pypi/requests/json"] = MockResponse(
         200,
         {
             "info": {"version": "2.31.0"},
@@ -528,11 +517,11 @@ async def test_validate_pypi_latest(mock_httpx):
 
 
 @pytest.mark.asyncio
-async def test_validate_pypi_valid_version(mock_httpx):
+async def test_validate_pypi_valid_version(mock_requests):
     """Known good version should pass."""
     from app import validate_pypi
 
-    mock_httpx["pypi.org/pypi/requests/json"] = MockResponse(
+    mock_requests["pypi.org/pypi/requests/json"] = MockResponse(
         200,
         {
             "info": {"version": "2.31.0"},
@@ -546,11 +535,11 @@ async def test_validate_pypi_valid_version(mock_httpx):
 
 
 @pytest.mark.asyncio
-async def test_validate_pypi_invalid_version(mock_httpx):
+async def test_validate_pypi_invalid_version(mock_requests):
     """Non-existent version for a real package."""
     from app import validate_pypi
 
-    mock_httpx["pypi.org/pypi/requests/json"] = MockResponse(
+    mock_requests["pypi.org/pypi/requests/json"] = MockResponse(
         200,
         {
             "info": {"version": "2.31.0"},
@@ -568,7 +557,7 @@ async def test_validate_pypi_nonexistent_package():
     """Package that does not exist on PyPI at all."""
     from app import validate_pypi
 
-    # No mock_httpx entry → default 404 response
+    # No mock_requests entry → default 404 response
     valid, error, resolved = await validate_pypi(
         "this-package-absolutely-does-not-exist-on-pypi-xyz"
     )
@@ -766,8 +755,8 @@ async def test_vim_j_k_in_sources(app_with_deps):
 
 @pytest.mark.asyncio
 async def test_tab_cycles_panels(app_with_deps):
-    """Tab cycles between Sources and Packages panels (Status excluded from cycle)."""
-    from app import PackagesPanel, SourcesPanel
+    """Tab cycles all four panels: Status -> Sources -> Packages -> Details."""
+    from app import DetailsPanel, PackagesPanel, SourcesPanel, StatusPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
@@ -775,44 +764,32 @@ async def test_tab_cycles_panels(app_with_deps):
         pkg_panel.focus()
         await pilot.pause()
 
-        # Packages -> Sources
+        # Packages (idx 2) -> Details (idx 3)
         await pilot.press("tab")
         await pilot.pause()
-        focused = app_with_deps.focused
-        assert isinstance(focused, SourcesPanel)
+        assert isinstance(app_with_deps.focused, DetailsPanel)
 
-        # Sources -> Packages
+        # Details (idx 3) -> Status (idx 0)
         await pilot.press("tab")
-        await pilot.pause()
-        focused = app_with_deps.focused
-        assert isinstance(focused, PackagesPanel)
-
-
-@pytest.mark.asyncio
-async def test_number_keys_jump_panels(app_with_deps):
-    """1/2/3 keys jump to specific panels."""
-    from app import PackagesPanel, SourcesPanel, StatusPanel
-
-    async with app_with_deps.run_test(size=(140, 30)) as pilot:
-        await pilot.pause()
-
-        # 1 -> Status
-        await pilot.press("1")
         await pilot.pause()
         assert isinstance(app_with_deps.focused, StatusPanel)
 
-        # 2 -> Sources
-        await pilot.press("2")
+        # Status (idx 0) -> Sources (idx 1)
+        await pilot.press("tab")
         await pilot.pause()
         assert isinstance(app_with_deps.focused, SourcesPanel)
 
-        # 3 -> Packages
-        await pilot.press("3")
+        # Sources (idx 1) -> Packages (idx 2)
+        await pilot.press("tab")
         await pilot.pause()
         assert isinstance(app_with_deps.focused, PackagesPanel)
 
+        # 4 -> Details
+        await pilot.press("4")
+        await pilot.pause()
+        assert isinstance(app_with_deps.focused, DetailsPanel)
 
-# ---------------------------------------------------------------------------
+
 # 9. Filter mode
 # ---------------------------------------------------------------------------
 
@@ -1415,26 +1392,25 @@ async def test_single_source_delete_skips_source_select(app_with_deps):
 
 
 @pytest.mark.asyncio
-async def test_fetch_latest_versions(mock_httpx):
+async def test_fetch_latest_versions(mock_requests):
     """Batch query should return latest versions for known packages."""
     from app import _fetch_latest_versions
 
-    mock_httpx["pypi.org/pypi/requests/json"] = MockResponse(
+    mock_requests["pypi.org/pypi/requests/json"] = MockResponse(
         200,
         {
             "info": {"version": "2.32.3"},
             "releases": {"2.32.3": [{}]},
         },
     )
-    mock_httpx["pypi.org/pypi/httpx/json"] = MockResponse(
+    mock_requests["pypi.org/pypi/httpx/json"] = MockResponse(
         200,
         {
             "info": {"version": "0.28.1"},
             "releases": {"0.28.1": [{}]},
         },
     )
-    versions, failures = await _fetch_latest_versions(["requests", "httpx"])
-    assert failures == 0
+    versions = await _fetch_latest_versions(["requests", "httpx"])
     assert "requests" in versions
     assert "httpx" in versions
     assert versions["requests"] == "2.32.3"
@@ -1446,12 +1422,9 @@ async def test_fetch_latest_versions_nonexistent():
     """Non-existent packages are counted as failures, not errors."""
     from app import _fetch_latest_versions
 
-    # No mock_httpx entry → default 404 response
-    versions, failures = await _fetch_latest_versions(
-        ["this-package-does-not-exist-xyz-12345"]
-    )
-    assert failures == 1
-    assert len(versions) == 0
+    # No mock_requests entry → default 404 response
+    versions = await _fetch_latest_versions(["this-package-does-not-exist-xyz-12345"])
+    assert versions["this-package-does-not-exist-xyz-12345"] is None
 
 
 @pytest.mark.asyncio
@@ -1459,9 +1432,8 @@ async def test_fetch_latest_versions_empty():
     """Empty input returns empty results."""
     from app import _fetch_latest_versions
 
-    versions, failures = await _fetch_latest_versions([])
+    versions = await _fetch_latest_versions([])
     assert versions == {}
-    assert failures == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1495,7 +1467,7 @@ async def test_outdated_check_with_mock(
     app = DependencyManagerApp()
 
     async def mock_fetch(packages):
-        return {_normalise(n): "99.0.0" for n in packages}, 0
+        return {_normalise(n): "99.0.0" for n in packages}
 
     monkeypatch.setattr("app._fetch_latest_versions", mock_fetch)
 
@@ -1532,7 +1504,7 @@ async def test_outdated_status_panel_shows_count(
 
     # Mock: all packages have a newer version available
     async def mock_fetch(packages):
-        return {_normalise(n): "99.0.0" for n in packages}, 0
+        return {_normalise(n): "99.0.0" for n in packages}
 
     monkeypatch.setattr("app._fetch_latest_versions", mock_fetch)
 
@@ -1568,7 +1540,7 @@ async def test_outdated_check_all_up_to_date(
             key = _normalise(name)
             if key in lock_versions:
                 result[key] = lock_versions[key]
-        return result, 0
+        return result
 
     monkeypatch.setattr("app._fetch_latest_versions", mock_fetch)
 
@@ -1994,28 +1966,6 @@ async def test_search_pypi_modal_escape_closes(app_with_deps):
 
 
 @pytest.mark.asyncio
-async def test_search_pypi_parse_html():
-    """``_parse_search_html`` should extract package info from HTML."""
-    from app import SearchPyPIModal
-
-    html = """
-    <a class="package-snippet">
-        <span class="package-snippet__name">requests</span>
-        <span class="package-snippet__version">2.31.0</span>
-        <p class="package-snippet__description">HTTP for Humans</p>
-    </a>
-    <a class="package-snippet">
-        <span class="package-snippet__name">httpx</span>
-        <span class="package-snippet__version">0.24.1</span>
-        <p class="package-snippet__description">A next-gen HTTP client</p>
-    </a>
-    """
-    results = SearchPyPIModal._parse_search_html(html)
-    assert len(results) == 2
-    assert results[0] == ("requests", "2.31.0", "HTTP for Humans")
-    assert results[1] == ("httpx", "0.24.1", "A next-gen HTTP client")
-
-
 # ---------------------------------------------------------------------------
 # 23. Package documentation viewer (D key)
 # ---------------------------------------------------------------------------
@@ -2361,23 +2311,33 @@ def test_parse_lock_normalises_names(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_shift_tab_cycles_panels_reverse(app_with_deps):
-    """Shift+Tab should cycle panels in reverse order."""
-    from app import PackagesPanel, SourcesPanel
+    """Shift+Tab should cycle panels in reverse order through all four panels."""
+    from app import DetailsPanel, PackagesPanel, SourcesPanel, StatusPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
 
-        # Start at Packages panel (index 1 in the cycle)
+        # Start at Packages panel (index 2 in the cycle)
         await pilot.press("3")
         await pilot.pause()
         assert isinstance(app_with_deps.focused, PackagesPanel)
 
-        # Shift+Tab -> should go to Sources (reverse cycle)
+        # Shift+Tab -> Sources (idx 1)
         await pilot.press("shift+tab")
         await pilot.pause()
         assert isinstance(app_with_deps.focused, SourcesPanel)
 
-        # Shift+Tab again -> should wrap back to Packages
+        # Shift+Tab -> Status (idx 0)
+        await pilot.press("shift+tab")
+        await pilot.pause()
+        assert isinstance(app_with_deps.focused, StatusPanel)
+
+        # Shift+Tab -> Details (idx 3, wraps)
+        await pilot.press("shift+tab")
+        await pilot.pause()
+        assert isinstance(app_with_deps.focused, DetailsPanel)
+
+        # Shift+Tab -> Packages (idx 2)
         await pilot.press("shift+tab")
         await pilot.pause()
         assert isinstance(app_with_deps.focused, PackagesPanel)

@@ -1363,6 +1363,7 @@ _HELP_TEXT = """\
   [#9ece6a]d[/]               Delete selected package
   [#9ece6a]/[/]               Filter packages
   [#9ece6a]o[/]               Check outdated packages
+  [#9ece6a]U[/]               Update all outdated
   [#9ece6a]s[/]               Sync  (uv sync)
   [#9ece6a]L[/]               Lock  (uv lock)
 
@@ -1497,6 +1498,7 @@ class DependencyManagerApp(App):
         Binding("u", "update_package", "Update", priority=True),
         Binding("d", "delete_package", "Delete", priority=True),
         Binding("o", "check_outdated", "Outdated", priority=True),
+        Binding("U", "update_all_outdated", "Update All", priority=True),
         Binding("r", "refresh", "Refresh", priority=True),
         Binding("slash", "focus_search", "/Filter", priority=True),
         Binding("i", "init_project", "Init", priority=True),
@@ -1931,6 +1933,64 @@ class DependencyManagerApp(App):
             )
         else:
             self.notify("All packages are up to date.", severity="information")
+
+    # -- Update all outdated ---------------------------------------------------
+
+    def action_update_all_outdated(self) -> None:
+        """Prompt to update every package that has a newer PyPI version."""
+        if not self._ensure_toml_or_warn():
+            return
+        outdated = [
+            pkg
+            for pkg in self._packages
+            if pkg.installed_version
+            and self._latest_versions.get(_normalise(pkg.name), "")
+            and pkg.installed_version
+            != self._latest_versions.get(_normalise(pkg.name), "")
+        ]
+        if not outdated:
+            self.notify("No outdated packages. Press 'o' to check.", severity="warning")
+            return
+        count = len(outdated)
+        self.push_screen(
+            ConfirmModal(
+                message=f"Update {count} outdated package{'s' if count != 1 else ''} to latest?",
+                title="Update All",
+            ),
+            callback=lambda confirmed: self._on_update_all_confirm(confirmed, outdated),
+        )
+
+    def _on_update_all_confirm(
+        self, confirmed: bool | None, outdated: list[Package]
+    ) -> None:
+        if confirmed:
+            self._do_update_all(outdated)
+
+    @work(exclusive=True, group="manage")
+    async def _do_update_all(self, outdated: list[Package]) -> None:
+        """Sequentially update all outdated packages to their latest versions."""
+        total = len(outdated)
+        failures: list[str] = []
+        for i, pkg in enumerate(outdated, 1):
+            latest = self._latest_versions.get(_normalise(pkg.name), "")
+            self._show_loading(f"Updating {i}/{total}: {pkg.name}...")
+            ok, output = await self.pkg_mgr.add(pkg.name, latest)
+            if not ok:
+                failures.append(pkg.name)
+        self._hide_loading()
+
+        succeeded = total - len(failures)
+        if failures:
+            self.notify(
+                f"Updated {succeeded}/{total} packages. Failed: {', '.join(failures)}",
+                severity="error",
+            )
+        else:
+            self.notify(
+                f"Updated all {total} package{'s' if total != 1 else ''} to latest.",
+                severity="information",
+            )
+        self._refresh_data()
 
     def action_show_help(self) -> None:
         self.push_screen(HelpModal())

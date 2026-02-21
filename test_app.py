@@ -1750,3 +1750,66 @@ async def test_lock_action(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         await asyncio.sleep(0.3)
         await pilot.pause()
         mock_lock.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 22. Update All Outdated
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_all_outdated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Pressing ``U`` with outdated packages opens a ConfirmModal."""
+    from app import ConfirmModal, DependencyManagerApp, _normalise
+
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_UVLOCK)
+    monkeypatch.chdir(tmp_path)
+
+    app = DependencyManagerApp()
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+
+        # Manually set latest versions so some packages appear outdated
+        app._latest_versions = {
+            _normalise("requests"): "99.0.0",
+            _normalise("httpx"): "99.0.0",
+            _normalise("click"): "99.0.0",
+        }
+
+        await pilot.press("U")
+        await pilot.pause()
+
+        # A ConfirmModal should have appeared
+        assert isinstance(app.screen, ConfirmModal)
+
+
+@pytest.mark.asyncio
+async def test_update_all_outdated_none_outdated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Pressing ``U`` with no outdated packages shows a warning, no modal."""
+    from app import ConfirmModal, DependencyManagerApp, _normalise
+
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_UVLOCK)
+    monkeypatch.chdir(tmp_path)
+
+    app = DependencyManagerApp()
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+
+        # Set latest versions to match installed (no outdated)
+        app._latest_versions = {
+            _normalise("requests"): "2.32.3",
+            _normalise("httpx"): "0.28.1",
+            _normalise("click"): "8.1.7",
+        }
+
+        await pilot.press("U")
+        await pilot.pause()
+
+        # No modal should appear — still on the main screen
+        assert not isinstance(app.screen, ConfirmModal)

@@ -916,6 +916,43 @@ async def test_add_modal_opens(app_with_deps):
 
 
 @pytest.mark.asyncio
+async def test_add_modal_has_group_selector(app_with_deps):
+    """Add modal contains a group-input field; Update modal does not."""
+    from app import AddPackageModal, Input, UpdatePackageModal
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        pkg_panel = app_with_deps.query_one("#packages-panel")
+        pkg_panel.focus()
+        await pilot.pause()
+
+        # Open the Add modal
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert isinstance(app_with_deps.screen, AddPackageModal)
+
+        # Group input should exist with placeholder "main"
+        group_input = app_with_deps.screen.query_one("#group-input", Input)
+        assert group_input is not None
+        assert group_input.placeholder == "main"
+
+        # Dismiss the Add modal
+        await pilot.press("escape")
+        await pilot.pause()
+
+        # Open the Update modal
+        await pilot.press("u")
+        await pilot.pause()
+
+        assert isinstance(app_with_deps.screen, UpdatePackageModal)
+
+        # Update modal should NOT have a group input
+        matches = app_with_deps.screen.query("#group-input")
+        assert len(matches) == 0
+
+
+@pytest.mark.asyncio
 async def test_update_modal_opens(app_with_deps):
     """u opens the Update Package modal when a package is selected."""
     async with app_with_deps.run_test(size=(140, 30)) as pilot:

@@ -127,14 +127,24 @@ class PackageManager:
         """Bootstrap a minimal ``pyproject.toml`` via ``uv init --bare``."""
         return await self._run("init", "--bare")
 
-    async def add(self, package: str, version: str | None = None) -> tuple[bool, str]:
+    async def add(
+        self,
+        package: str,
+        version: str | None = None,
+        group: str | None = None,
+    ) -> tuple[bool, str]:
         """Add or update a dependency.
 
         ``uv add`` writes to ``pyproject.toml``, updates ``uv.lock``, and
-        syncs the virtual environment in one step.
+        syncs the virtual environment in one step.  When *group* is given
+        (and is not ``"main"``), the ``--group`` flag is forwarded to ``uv``.
         """
+        args: list[str] = ["add"]
+        if group and group != "main":
+            args.extend(["--group", group])
         spec = f"{package}=={version}" if version else package
-        return await self._run("add", spec)
+        args.append(spec)
+        return await self._run(*args)
 
     async def remove(self, package: str) -> tuple[bool, str]:
         """Remove a dependency from the project."""
@@ -1209,8 +1219,98 @@ class PackageModal(ModalScreen[tuple[str, str] | None]):
         self.dismiss(None)
 
 
-class AddPackageModal(PackageModal):
+class AddPackageModal(ModalScreen[tuple[str, str, str] | None]):
+    """Add-package modal with an extra dependency-group field."""
+
     _modal_title: ClassVar[str] = "Add Package"
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(
+        self,
+        package_name: str = "",
+        package_version: str = "",
+        name_disabled: bool = False,
+    ) -> None:
+        super().__init__()
+        self._pkg_name = package_name
+        self._pkg_version = package_version
+        self._name_disabled = name_disabled
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-dialog"):
+            yield Static(self._modal_title, id="modal-title")
+
+            yield Static("Package name", classes="modal-label")
+            yield Input(
+                value=self._pkg_name,
+                placeholder="e.g. requests",
+                id="input-name",
+                disabled=self._name_disabled,
+            )
+
+            yield Static("Version  (blank = latest)", classes="modal-label")
+            yield Input(
+                value=self._pkg_version,
+                placeholder="e.g. 2.31.0",
+                id="input-version",
+            )
+
+            yield Static("Group  (blank = main)", classes="modal-label")
+            yield Input(
+                placeholder="main",
+                id="group-input",
+            )
+
+            yield Static("", id="validation-error")
+
+            with Horizontal(id="modal-buttons"):
+                yield Button("OK", variant="success", id="modal-btn-ok")
+                yield Button("Cancel", variant="error", id="modal-btn-cancel")
+
+    def on_mount(self) -> None:
+        target = "#input-version" if self._name_disabled else "#input-name"
+        self.query_one(target, Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "modal-btn-cancel":
+            self.dismiss(None)
+        elif event.button.id == "modal-btn-ok":
+            self._submit()
+
+    def on_input_submitted(self, _event: Input.Submitted) -> None:
+        self._submit()
+
+    @work(exclusive=True)
+    async def _submit(self) -> None:
+        name_input = self.query_one("#input-name", Input)
+        version_input = self.query_one("#input-version", Input)
+        group_input = self.query_one("#group-input", Input)
+        error_label = self.query_one("#validation-error", Static)
+
+        name = name_input.value.strip()
+        version_raw = version_input.value.strip() or None
+        group = group_input.value.strip() or "main"
+
+        if not name:
+            error_label.update("Package name cannot be empty.")
+            return
+
+        error_label.update("Validating on PyPI...")
+
+        valid, error_msg, resolved = await validate_pypi(name, version_raw)
+
+        if not valid:
+            error_label.update(error_msg or "Validation failed.")
+            return
+
+        error_label.update("")
+        self.dismiss((name, resolved or "", group))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class UpdatePackageModal(PackageModal):
@@ -1862,21 +1962,25 @@ class DependencyManagerApp(App):
             return
         self.push_screen(AddPackageModal(), callback=self._on_add_result)
 
-    def _on_add_result(self, result: tuple[str, str] | None) -> None:
+    def _on_add_result(self, result: tuple[str, str, str] | None) -> None:
         if result is not None:
             self._do_add(result)
 
     @work(exclusive=True, group="manage")
-    async def _do_add(self, result: tuple[str, str]) -> None:
-        name, version = result
+    async def _do_add(self, result: tuple[str, str, str]) -> None:
+        name, version, group = result
         label = f"{name}=={version}" if version else name
         self._show_loading(f"Adding {label}...")
 
-        ok, output = await self.pkg_mgr.add(name, version or None)
+        ok, output = await self.pkg_mgr.add(name, version or None, group or None)
         self._hide_loading()
 
         if ok:
-            self.notify(f"Added {label} to pyproject.toml", severity="information")
+            target = f" to group '{group}'" if group and group != "main" else ""
+            self.notify(
+                f"Added {label} to pyproject.toml{target}",
+                severity="information",
+            )
         else:
             self.notify(f"Failed to add {name}: {output[:200]}", severity="error")
         self._refresh_data()

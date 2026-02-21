@@ -26,10 +26,73 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 import pytest_asyncio
+
+
+# ---------------------------------------------------------------------------
+# Mock HTTP infrastructure — prevents all real network calls in tests
+# ---------------------------------------------------------------------------
+
+
+class MockResponse:
+    """Fake ``httpx.Response`` for PyPI API mocking."""
+
+    def __init__(
+        self,
+        status_code: int,
+        json_data: dict[str, Any] | None = None,
+        text: str = "",
+    ) -> None:
+        self.status_code = status_code
+        self._json = json_data or {}
+        self.text = text
+
+    def json(self) -> dict[str, Any]:
+        return self._json
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                "",
+                request=httpx.Request("GET", ""),
+                response=self,  # type: ignore[arg-type]
+            )
+
+
+@pytest.fixture(autouse=True)
+def mock_httpx(monkeypatch: pytest.MonkeyPatch) -> dict[str, MockResponse]:
+    """Patch ``httpx.AsyncClient`` globally — no test ever makes real HTTP calls.
+
+    Tests that need specific HTTP responses can populate the returned *responses*
+    dict.  Keys are substring-matched against request URLs; the first match wins.
+    Unmatched URLs receive a 404 response.
+    """
+    responses: dict[str, MockResponse] = {}
+
+    class MockClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> MockClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+        async def get(self, url: str, **kwargs: Any) -> MockResponse:
+            for pattern, resp in responses.items():
+                if pattern in url:
+                    return resp
+            return MockResponse(404)
+
+    monkeypatch.setattr(httpx, "AsyncClient", MockClient)
+    return responses
+
 
 # ---------------------------------------------------------------------------
 # 1. Module imports
@@ -458,21 +521,35 @@ def test_load_dependencies_with_installed(
 
 
 @pytest.mark.asyncio
-async def test_validate_pypi_latest():
+async def test_validate_pypi_latest(mock_httpx):
     """No version specified -> resolves to latest."""
     from app import validate_pypi
 
+    mock_httpx["pypi.org/pypi/requests/json"] = MockResponse(
+        200,
+        {
+            "info": {"version": "2.31.0"},
+            "releases": {"2.31.0": [{}], "2.30.0": [{}]},
+        },
+    )
     valid, error, resolved = await validate_pypi("requests")
     assert valid is True
     assert error is None
-    assert resolved  # should be a version string like "2.32.3"
+    assert resolved == "2.31.0"
 
 
 @pytest.mark.asyncio
-async def test_validate_pypi_valid_version():
+async def test_validate_pypi_valid_version(mock_httpx):
     """Known good version should pass."""
     from app import validate_pypi
 
+    mock_httpx["pypi.org/pypi/requests/json"] = MockResponse(
+        200,
+        {
+            "info": {"version": "2.31.0"},
+            "releases": {"2.31.0": [{}], "2.30.0": [{}]},
+        },
+    )
     valid, error, resolved = await validate_pypi("requests", "2.31.0")
     assert valid is True
     assert error is None
@@ -480,10 +557,17 @@ async def test_validate_pypi_valid_version():
 
 
 @pytest.mark.asyncio
-async def test_validate_pypi_invalid_version():
+async def test_validate_pypi_invalid_version(mock_httpx):
     """Non-existent version for a real package."""
     from app import validate_pypi
 
+    mock_httpx["pypi.org/pypi/requests/json"] = MockResponse(
+        200,
+        {
+            "info": {"version": "2.31.0"},
+            "releases": {"2.31.0": [{}], "2.30.0": [{}]},
+        },
+    )
     valid, error, resolved = await validate_pypi("requests", "999.999.999")
     assert valid is False
     assert error is not None
@@ -495,6 +579,7 @@ async def test_validate_pypi_nonexistent_package():
     """Package that does not exist on PyPI at all."""
     from app import validate_pypi
 
+    # No mock_httpx entry → default 404 response
     valid, error, resolved = await validate_pypi(
         "this-package-absolutely-does-not-exist-on-pypi-xyz"
     )
@@ -1341,17 +1426,30 @@ async def test_single_source_delete_skips_source_select(app_with_deps):
 
 
 @pytest.mark.asyncio
-async def test_fetch_latest_versions():
+async def test_fetch_latest_versions(mock_httpx):
     """Batch query should return latest versions for known packages."""
     from app import _fetch_latest_versions
 
+    mock_httpx["pypi.org/pypi/requests/json"] = MockResponse(
+        200,
+        {
+            "info": {"version": "2.32.3"},
+            "releases": {"2.32.3": [{}]},
+        },
+    )
+    mock_httpx["pypi.org/pypi/httpx/json"] = MockResponse(
+        200,
+        {
+            "info": {"version": "0.28.1"},
+            "releases": {"0.28.1": [{}]},
+        },
+    )
     versions, failures = await _fetch_latest_versions(["requests", "httpx"])
     assert failures == 0
     assert "requests" in versions
     assert "httpx" in versions
-    # Versions should be non-empty strings
-    assert len(versions["requests"]) > 0
-    assert len(versions["httpx"]) > 0
+    assert versions["requests"] == "2.32.3"
+    assert versions["httpx"] == "0.28.1"
 
 
 @pytest.mark.asyncio
@@ -1359,6 +1457,7 @@ async def test_fetch_latest_versions_nonexistent():
     """Non-existent packages are counted as failures, not errors."""
     from app import _fetch_latest_versions
 
+    # No mock_httpx entry → default 404 response
     versions, failures = await _fetch_latest_versions(
         ["this-package-does-not-exist-xyz-12345"]
     )

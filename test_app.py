@@ -24,6 +24,7 @@ These tests verify:
 
 from __future__ import annotations
 
+import json
 import textwrap
 from pathlib import Path
 from typing import Any
@@ -2157,3 +2158,461 @@ async def test_details_shows_summary(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
         assert "Description" in rendered
         assert "HTTP for Humans" in rendered
+
+
+# ---------------------------------------------------------------------------
+# 24. _normalise helper
+# ---------------------------------------------------------------------------
+
+
+def test_normalise():
+    """PEP 503 normalisation: lowercase, hyphens/underscores/dots -> hyphen."""
+    from app import _normalise
+
+    assert _normalise("My-Package") == "my-package"
+    assert _normalise("my_package") == "my-package"
+    assert _normalise("my.package") == "my-package"
+    assert _normalise("MY.Package_Name") == "my-package-name"
+
+
+def test_normalise_already_normalised():
+    """Already-normalised names pass through unchanged."""
+    from app import _normalise
+
+    assert _normalise("requests") == "requests"
+    assert _normalise("my-package") == "my-package"
+
+
+def test_normalise_consecutive_separators():
+    """Consecutive separators are collapsed into a single hyphen."""
+    from app import _normalise
+
+    assert _normalise("my__package") == "my-package"
+    assert _normalise("my..package") == "my-package"
+    assert _normalise("my-_package") == "my-package"
+
+
+# ---------------------------------------------------------------------------
+# 25. _parse_dep_string edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_parse_dep_string_with_extras():
+    """Extras in brackets should be stripped; name is extracted correctly."""
+    from app import _parse_dep_string
+
+    result = _parse_dep_string("requests[security]>=2.31")
+    assert result is not None
+    name, spec = result
+    assert name == "requests"
+    assert ">=2.31" in spec
+
+
+def test_parse_dep_string_complex_specifier():
+    """Multiple version constraints separated by commas."""
+    from app import _parse_dep_string
+
+    result = _parse_dep_string("package>=1.0,<2.0")
+    assert result is not None
+    name, spec = result
+    assert name == "package"
+    assert ">=1.0" in spec
+
+
+def test_parse_dep_string_no_version():
+    """Bare package name produces a wildcard specifier."""
+    from app import _parse_dep_string
+
+    result = _parse_dep_string("click")
+    assert result is not None
+    name, spec = result
+    assert name == "click"
+    assert spec == "*"
+
+
+def test_parse_dep_string_invalid_empty():
+    """Empty string should return None."""
+    from app import _parse_dep_string
+
+    result = _parse_dep_string("")
+    assert result is None
+
+
+def test_parse_dep_string_invalid_comment():
+    """Comment line should return None."""
+    from app import _parse_dep_string
+
+    result = _parse_dep_string("# this is a comment")
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# 26. _parse_installed tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_parse_installed_with_mock_output(monkeypatch: pytest.MonkeyPatch):
+    """``_parse_installed`` parses ``uv pip list --format=json`` output."""
+    from app import _parse_installed
+
+    json_output = json.dumps(
+        [
+            {"name": "requests", "version": "2.32.3"},
+            {"name": "click", "version": "8.1.7"},
+        ]
+    )
+
+    async def mock_exec(*args, **kwargs):
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return json_output.encode(), b""
+
+        return FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+
+    results = await _parse_installed("/usr/bin/uv")
+    assert len(results) == 2
+    assert ("requests", "==2.32.3", "venv") in results
+    assert ("click", "==8.1.7", "venv") in results
+
+
+@pytest.mark.asyncio
+async def test_parse_installed_no_uv():
+    """``_parse_installed`` returns empty when uv_path is None."""
+    from app import _parse_installed
+
+    results = await _parse_installed(None)
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_parse_installed_error(monkeypatch: pytest.MonkeyPatch):
+    """``_parse_installed`` returns empty on subprocess failure."""
+    from app import _parse_installed
+
+    async def mock_exec(*args, **kwargs):
+        class FakeProc:
+            returncode = 1
+
+            async def communicate(self):
+                return b"", b"error"
+
+        return FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+
+    results = await _parse_installed("/usr/bin/uv")
+    assert results == []
+
+
+# ---------------------------------------------------------------------------
+# 27. _parse_lock tests
+# ---------------------------------------------------------------------------
+
+
+def test_parse_lock_basic(tmp_path: Path):
+    """``_parse_lock`` returns normalised name -> version mapping."""
+    from app import _parse_lock
+
+    lock_path = tmp_path / "uv.lock"
+    lock_path.write_text(_UVLOCK)
+
+    result = _parse_lock(lock_path)
+    assert result["requests"] == "2.32.3"
+    assert result["httpx"] == "0.28.1"
+    assert result["click"] == "8.1.7"
+
+
+def test_parse_lock_missing_file(tmp_path: Path):
+    """``_parse_lock`` returns empty dict for a missing file."""
+    from app import _parse_lock
+
+    result = _parse_lock(tmp_path / "nonexistent.lock")
+    assert result == {}
+
+
+def test_parse_lock_invalid_toml(tmp_path: Path):
+    """``_parse_lock`` returns empty dict for malformed TOML."""
+    from app import _parse_lock
+
+    lock_path = tmp_path / "uv.lock"
+    lock_path.write_text("this is not valid TOML {{{}}")
+
+    result = _parse_lock(lock_path)
+    assert result == {}
+
+
+def test_parse_lock_normalises_names(tmp_path: Path):
+    """``_parse_lock`` normalises package names (PEP 503)."""
+    from app import _parse_lock
+
+    lock_path = tmp_path / "uv.lock"
+    lock_path.write_text(
+        textwrap.dedent("""\
+        version = 1
+
+        [[package]]
+        name = "My_Package"
+        version = "1.0.0"
+    """)
+    )
+
+    result = _parse_lock(lock_path)
+    assert "my-package" in result
+    assert result["my-package"] == "1.0.0"
+
+
+# ---------------------------------------------------------------------------
+# 28. Shift+Tab cycles panels in reverse
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_shift_tab_cycles_panels_reverse(app_with_deps):
+    """Shift+Tab should cycle panels in reverse order."""
+    from app import PackagesPanel, SourcesPanel
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+
+        # Start at Packages panel (index 1 in the cycle)
+        await pilot.press("3")
+        await pilot.pause()
+        assert isinstance(app_with_deps.focused, PackagesPanel)
+
+        # Shift+Tab -> should go to Sources (reverse cycle)
+        await pilot.press("shift+tab")
+        await pilot.pause()
+        assert isinstance(app_with_deps.focused, SourcesPanel)
+
+        # Shift+Tab again -> should wrap back to Packages
+        await pilot.press("shift+tab")
+        await pilot.pause()
+        assert isinstance(app_with_deps.focused, PackagesPanel)
+
+
+# ---------------------------------------------------------------------------
+# 29. gg timeout test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_gg_timeout_does_not_jump(app_with_deps):
+    """Pressing ``g`` once, waiting >0.5s, then ``g`` again should NOT jump to top."""
+    import asyncio as aio
+
+    from app import PackagesPanel
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        pkg_panel = app_with_deps.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
+        await pilot.pause()
+
+        # Move to the bottom
+        await pilot.press("G")
+        await pilot.pause()
+        bottom_idx = pkg_panel.selected_index
+        assert bottom_idx == pkg_panel.package_count - 1
+
+        # Press g once
+        await pilot.press("g")
+        await pilot.pause()
+
+        # Wait longer than _GG_TIMEOUT (0.5s)
+        await aio.sleep(0.6)
+
+        # Press g again — should start a new g, not trigger gg
+        await pilot.press("g")
+        await pilot.pause()
+
+        # Cursor should NOT have jumped to top (the second g starts a new pending)
+        assert pkg_panel.selected_index == bottom_idx
+
+
+# ---------------------------------------------------------------------------
+# 30. SourceSelectModal number key test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_source_select_modal_number_key(app_multi_source):
+    """Pressing a number key in SourceSelectModal selects the corresponding source."""
+    from app import PackagesPanel
+
+    async with app_multi_source.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        pkg_panel = app_multi_source.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
+        await pilot.pause()
+
+        # Navigate to "requests" which has multiple sources
+        for i in range(pkg_panel.package_count):
+            pkg = pkg_panel.get_selected_package()
+            if pkg and pkg.name == "requests":
+                break
+            await pilot.press("j")
+            await pilot.pause()
+
+        await pilot.press("d")
+        await pilot.pause()
+
+        # Verify SourceSelectModal is showing
+        source_dialog = app_multi_source.screen.query_one("#source-select-dialog")
+        assert source_dialog is not None
+
+        # Press "1" to select the first source — should jump to ConfirmModal
+        await pilot.press("1")
+        await pilot.pause()
+
+        confirm_dialog = app_multi_source.screen.query_one("#confirm-dialog")
+        assert confirm_dialog is not None
+
+
+# ---------------------------------------------------------------------------
+# 31. PackageManager mock tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_package_manager_add(monkeypatch: pytest.MonkeyPatch):
+    """PackageManager.add() builds the correct command and returns output."""
+    from app import PackageManager
+
+    mgr = PackageManager()
+
+    async def mock_exec(*args, **kwargs):
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return b"Added requests==2.31.0", b""
+
+        return FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+
+    ok, output = await mgr.add("requests", "2.31.0")
+    assert ok is True
+    assert "Added" in output
+
+
+@pytest.mark.asyncio
+async def test_package_manager_add_with_group(monkeypatch: pytest.MonkeyPatch):
+    """PackageManager.add() passes --group when group is not 'main'."""
+    from app import PackageManager
+
+    mgr = PackageManager()
+    captured_args: list[str] = []
+
+    async def mock_exec(*args, **kwargs):
+        captured_args.extend(args)
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return b"ok", b""
+
+        return FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+
+    ok, output = await mgr.add("pytest", "7.0", group="dev")
+    assert ok is True
+    assert "--group" in captured_args
+    assert "dev" in captured_args
+
+
+@pytest.mark.asyncio
+async def test_package_manager_remove(monkeypatch: pytest.MonkeyPatch):
+    """PackageManager.remove() runs ``uv remove``."""
+    from app import PackageManager
+
+    mgr = PackageManager()
+
+    async def mock_exec(*args, **kwargs):
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return b"Removed requests", b""
+
+        return FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+
+    ok, output = await mgr.remove("requests")
+    assert ok is True
+    assert "Removed" in output
+
+
+@pytest.mark.asyncio
+async def test_package_manager_sync(monkeypatch: pytest.MonkeyPatch):
+    """PackageManager.sync() runs ``uv sync``."""
+    from app import PackageManager
+
+    mgr = PackageManager()
+
+    async def mock_exec(*args, **kwargs):
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return b"Synced", b""
+
+        return FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+
+    ok, output = await mgr.sync()
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_package_manager_lock(monkeypatch: pytest.MonkeyPatch):
+    """PackageManager.lock() runs ``uv lock``."""
+    from app import PackageManager
+
+    mgr = PackageManager()
+
+    async def mock_exec(*args, **kwargs):
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return b"Locked", b""
+
+        return FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+
+    ok, output = await mgr.lock()
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_package_manager_failure(monkeypatch: pytest.MonkeyPatch):
+    """PackageManager returns (False, output) on non-zero exit code."""
+    from app import PackageManager
+
+    mgr = PackageManager()
+
+    async def mock_exec(*args, **kwargs):
+        class FakeProc:
+            returncode = 1
+
+            async def communicate(self):
+                return b"", b"error: something went wrong"
+
+        return FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", mock_exec)
+
+    ok, output = await mgr.add("nonexistent-pkg")
+    assert ok is False
+    assert "error" in output

@@ -783,21 +783,29 @@ class SourcesPanel(PanelWidget):
         if self._sources and self.selected_index > 0:
             self.selected_index -= 1
             self._render_list()
+            self._scroll_to_selected()
 
     def move_down(self) -> None:
         if self._sources and self.selected_index < len(self._sources) - 1:
             self.selected_index += 1
             self._render_list()
+            self._scroll_to_selected()
 
     def jump_top(self) -> None:
         if self._sources:
             self.selected_index = 0
             self._render_list()
+            self._scroll_to_selected()
 
     def jump_bottom(self) -> None:
         if self._sources:
             self.selected_index = len(self._sources) - 1
             self._render_list()
+            self._scroll_to_selected()
+
+    def _scroll_to_selected(self) -> None:
+        """Scroll so the selected item stays visible with context."""
+        self.scroll_to(0, max(0, self.selected_index - 2), animate=False)
 
 
 class PackagesPanel(PanelWidget):
@@ -873,7 +881,11 @@ class PackagesPanel(PanelWidget):
         self._filtered_packages = pkgs
         if self.selected_index >= len(self._filtered_packages):
             self.selected_index = max(0, len(self._filtered_packages) - 1)
-        self.border_title = f"Packages [{len(self._filtered_packages)}]"
+        count = len(self._filtered_packages)
+        if self._filter:
+            self.border_title = f"Packages [{count}] [filter: {self._filter}]"
+        else:
+            self.border_title = f"Packages [{count}]"
         self._render_list()
 
     def _render_list(self) -> None:
@@ -896,7 +908,7 @@ class PackagesPanel(PanelWidget):
                 ver_style = "#565f89"
 
             # Source indicators
-            src_tags = " ".join(s.file.split(".")[0][:3] for s in pkg.sources)
+            src_tags = " ".join(_source_abbrev(s.file) for s in pkg.sources)
 
             if i == self.selected_index:
                 lines.append(
@@ -931,6 +943,7 @@ class PackagesPanel(PanelWidget):
         if self._filtered_packages and self.selected_index > 0:
             self.selected_index -= 1
             self._render_list()
+            self._scroll_to_selected()
 
     def move_down(self) -> None:
         if (
@@ -939,16 +952,23 @@ class PackagesPanel(PanelWidget):
         ):
             self.selected_index += 1
             self._render_list()
+            self._scroll_to_selected()
 
     def jump_top(self) -> None:
         if self._filtered_packages:
             self.selected_index = 0
             self._render_list()
+            self._scroll_to_selected()
 
     def jump_bottom(self) -> None:
         if self._filtered_packages:
             self.selected_index = len(self._filtered_packages) - 1
             self._render_list()
+            self._scroll_to_selected()
+
+    def _scroll_to_selected(self) -> None:
+        """Scroll so the selected item stays visible with context."""
+        self.scroll_to(0, max(0, self.selected_index - 2), animate=False)
 
 
 class DetailsPanel(PanelWidget):
@@ -1021,6 +1041,29 @@ _SOURCE_COLORS: dict[str, str] = {
     "Pipfile": "#9ece6a",  # green
     "venv": "#565f89",  # dim
 }
+
+
+_SOURCE_ABBREV: dict[str, str] = {
+    "pyproject.toml": "pyproj",
+    "requirements.txt": "reqs",
+    "requirements-dev.txt": "reqs-d",
+    "setup.py": "setup",
+    "setup.cfg": "setcfg",
+    "Pipfile": "pipf",
+}
+
+
+def _source_abbrev(filename: str) -> str:
+    """Return readable abbreviation for a source filename."""
+    if filename in _SOURCE_ABBREV:
+        return _SOURCE_ABBREV[filename]
+    if filename.startswith("pyproject.toml"):
+        return "pyproj"
+    if filename.startswith("requirements"):
+        return "reqs"
+    if filename == "venv":
+        return "venv"
+    return filename[:6]
 
 
 def _source_color(label: str) -> str:
@@ -1170,6 +1213,7 @@ class UpdatePackageModal(PackageModal):
 _HELP_TEXT = """\
 [b #7aa2f7]NAVIGATION[/]
   [#9ece6a]Tab[/]             Cycle panel focus
+  [#9ece6a]Shift+Tab[/]       Previous panel
   [#9ece6a]1[/] / [#9ece6a]2[/] / [#9ece6a]3[/]       Jump to Status / Sources / Packages
   [#9ece6a]j[/] / [#9ece6a]k[/]           Move down / up
   [#9ece6a]g g[/]             Jump to first item
@@ -1330,13 +1374,12 @@ class DependencyManagerApp(App):
         # gg sequence state
         self._pending_g: bool = False
         self._pending_g_time: float = 0.0
-        # Panel list for Tab cycling (only focusable panels)
+        # Panel list for Tab cycling (only navigable panels)
         self._panel_ids: list[str] = [
-            "status-panel",
             "sources-panel",
             "packages-panel",
         ]
-        self._current_panel_idx: int = 2  # start on packages
+        self._current_panel_idx: int = 1  # start on packages
 
     # -- helpers ---------------------------------------------------------------
 
@@ -1388,7 +1431,7 @@ class DependencyManagerApp(App):
         # Focus the packages panel
         pkg_panel = self.query_one("#packages-panel", PackagesPanel)
         pkg_panel.focus()
-        self._current_panel_idx = 2
+        self._current_panel_idx = 1
         self._update_hint_bar()
 
         toml_path = Path.cwd() / "pyproject.toml"
@@ -1423,7 +1466,7 @@ class DependencyManagerApp(App):
                 pkg_panel.set_text_filter("")
                 pkg_panel.filter_active = False
                 pkg_panel.focus()
-                self._current_panel_idx = 2
+                self._current_panel_idx = 1
                 self._update_details_for_selection()
                 self._update_hint_bar()
                 return
@@ -1435,7 +1478,7 @@ class DependencyManagerApp(App):
                 pkg_panel = self.query_one("#packages-panel", PackagesPanel)
                 pkg_panel.filter_active = False
                 pkg_panel.focus()
-                self._current_panel_idx = 2
+                self._current_panel_idx = 1
                 self._update_details_for_selection()
                 self._update_hint_bar()
                 return
@@ -1459,17 +1502,19 @@ class DependencyManagerApp(App):
         if key == "1":
             event.prevent_default()
             event.stop()
-            self._jump_to_panel(0)
+            # Status panel is not in the Tab cycle but still directly accessible
+            self.query_one("#status-panel").focus()
+            self._update_hint_bar()
             return
         if key == "2":
             event.prevent_default()
             event.stop()
-            self._jump_to_panel(1)
+            self._jump_to_panel(0)
             return
         if key == "3":
             event.prevent_default()
             event.stop()
-            self._jump_to_panel(2)
+            self._jump_to_panel(1)
             return
 
         # --- Panel-specific Vim navigation ---
@@ -1535,6 +1580,13 @@ class DependencyManagerApp(App):
             event.prevent_default()
             event.stop()
             self._on_source_selection_changed()
+            return
+
+        # Enter on packages panel opens update modal
+        if key == "enter" and isinstance(panel, PackagesPanel):
+            event.prevent_default()
+            event.stop()
+            self.action_update_package()
             return
 
         # Any other key resets the g-pending state

@@ -57,6 +57,7 @@ def test_imports():
         _remove_from_pipfile,
         _remove_from_requirements,
         _remove_from_setup_cfg,
+        _source_abbrev,
         load_dependencies,
         validate_pypi,
     )
@@ -689,8 +690,8 @@ async def test_vim_j_k_in_sources(app_with_deps):
 
 @pytest.mark.asyncio
 async def test_tab_cycles_panels(app_with_deps):
-    """Tab cycles through the three focusable panels."""
-    from app import PackagesPanel, SourcesPanel, StatusPanel
+    """Tab cycles between Sources and Packages panels (Status excluded from cycle)."""
+    from app import PackagesPanel, SourcesPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
@@ -698,13 +699,7 @@ async def test_tab_cycles_panels(app_with_deps):
         pkg_panel.focus()
         await pilot.pause()
 
-        # Packages -> Status
-        await pilot.press("tab")
-        await pilot.pause()
-        focused = app_with_deps.focused
-        assert isinstance(focused, StatusPanel)
-
-        # Status -> Sources
+        # Packages -> Sources
         await pilot.press("tab")
         await pilot.pause()
         focused = app_with_deps.focused
@@ -1537,3 +1532,51 @@ async def test_source_selection_filters_packages(app_multi_source):
         # Package count should be <= all_count (filtered)
         filtered_count = pkg_panel.package_count
         assert filtered_count <= all_count
+
+
+# ---------------------------------------------------------------------------
+# 18. Filter-active indicator
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_filter_active_indicator(app_with_deps):
+    """Packages panel title should show filter text when filter is active."""
+    from app import PackagesPanel
+    from textual.widgets import Input
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.press("slash")
+        await pilot.pause()
+
+        filter_input = app_with_deps.query_one("#filter-input", Input)
+        filter_input.value = "http"
+        await pilot.pause()
+
+        await pilot.press("enter")  # close filter, keep text
+        await pilot.pause()
+        pkg_panel = app_with_deps.query_one("#packages-panel", PackagesPanel)
+        title = str(pkg_panel.border_title or "")
+        assert "filter" in title.lower()
+        assert "http" in title.lower()
+
+
+# ---------------------------------------------------------------------------
+# 19. Enter on packages opens Update modal
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_enter_on_package_opens_update(app_with_deps):
+    """Pressing Enter on a selected package should open the Update modal."""
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.press("3")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        # Check if UpdatePackageModal is the current screen
+        from app import UpdatePackageModal
+
+        assert isinstance(app_with_deps.screen, UpdatePackageModal)

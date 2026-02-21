@@ -41,7 +41,6 @@ import ast
 import configparser
 
 import httpx
-from rich.text import Text
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -50,7 +49,6 @@ from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
-    Footer,
     Input,
     LoadingIndicator,
     Static,
@@ -514,7 +512,7 @@ def _remove_from_setup_cfg(path: Path, pkg_name: str) -> tuple[bool, str]:
     except Exception as exc:
         return False, f"Failed to parse setup.cfg: {exc}"
     raw = cfg.get("options", "install_requires", fallback="")
-    lines = [l.strip() for l in raw.strip().splitlines() if l.strip()]
+    lines = [ln.strip() for ln in raw.strip().splitlines() if ln.strip()]
     new_lines: list[str] = []
     removed = False
     for line in lines:
@@ -782,9 +780,9 @@ class StatusPanel(PanelWidget):
         lines.append(f"[#c0caf5]uv[/]     [#9ece6a]{uv_ver}[/]")
 
         if venv_ok:
-            lines.append(f"[#c0caf5]venv:[/]  [#9ece6a].venv \u2713[/]")
+            lines.append("[#c0caf5]venv:[/]  [#9ece6a].venv \u2713[/]")
         else:
-            lines.append(f"[#c0caf5]venv:[/]  [#f7768e]No venv[/]")
+            lines.append("[#c0caf5]venv:[/]  [#f7768e]No venv[/]")
 
         lines.append(f"[#c0caf5]{pkg_count}[/] [#565f89]packages[/]")
         if source_count:

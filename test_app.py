@@ -28,11 +28,10 @@ import json
 import textwrap
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-import pytest_asyncio
 
 
 # ---------------------------------------------------------------------------
@@ -103,13 +102,9 @@ def mock_httpx(monkeypatch: pytest.MonkeyPatch) -> dict[str, MockResponse]:
 def test_imports():
     """All public symbols should be importable."""
     from app import (
-        AddPackageModal,
-        ConfirmModal,
         DepSource,
         DependencyManagerApp,
         DetailsPanel,
-        HelpModal,
-        Package,
         PackageManager,
         PackagesPanel,
         PanelWidget,
@@ -117,14 +112,7 @@ def test_imports():
         SearchPyPIModal,
         SourcesPanel,
         StatusPanel,
-        UpdatePackageModal,
         _fetch_latest_versions,
-        _remove_from_pipfile,
-        _remove_from_requirements,
-        _remove_from_setup_cfg,
-        _source_abbrev,
-        load_dependencies,
-        validate_pypi,
     )
 
     assert DependencyManagerApp is not None
@@ -669,7 +657,7 @@ async def test_sources_panel_populated(app_with_deps):
 @pytest.mark.asyncio
 async def test_details_panel_updates_on_selection(app_with_deps):
     """Details panel should show info for the selected package."""
-    from app import DetailsPanel, PackagesPanel
+    from app import DetailsPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
@@ -935,7 +923,7 @@ async def test_filter_filters_packages(app_with_deps):
 @pytest.mark.asyncio
 async def test_hint_bar_updates(app_with_deps):
     """Hint bar shows contextual hints per panel."""
-    from app import PackagesPanel, SourcesPanel, StatusPanel
+    from app import PackagesPanel
     from textual.widgets import Static
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
@@ -1221,8 +1209,8 @@ def test_remove_from_setup_cfg(tmp_path: Path):
     cfg = configparser.ConfigParser()
     cfg.read(str(cfg_path))
     raw = cfg.get("options", "install_requires", fallback="")
-    remaining = [l.strip() for l in raw.strip().splitlines() if l.strip()]
-    names = [l.split(">")[0].split("=")[0].split("<")[0].strip() for l in remaining]
+    remaining = [ln.strip() for ln in raw.strip().splitlines() if ln.strip()]
+    names = [ln.split(">")[0].split("=")[0].split("<")[0].strip() for ln in remaining]
     assert "click" not in names
     assert "requests" in names
     assert "boto3" in names

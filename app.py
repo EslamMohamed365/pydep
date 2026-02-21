@@ -1723,6 +1723,24 @@ class SearchPyPIModal(ModalScreen[str | None]):
                 0, max(0, self._selected - 3), animate=False
             )
             return
+        if key == "pagedown":
+            event.prevent_default()
+            event.stop()
+            self._selected = min(self._selected + 5, len(self._results) - 1)
+            self._render_results()
+            self.query_one("#search-results", Static).scroll_to(
+                0, max(0, self._selected - 3), animate=False
+            )
+            return
+        if key == "pageup":
+            event.prevent_default()
+            event.stop()
+            self._selected = max(self._selected - 5, 0)
+            self._render_results()
+            self.query_one("#search-results", Static).scroll_to(
+                0, max(0, self._selected - 3), animate=False
+            )
+            return
         if key == "enter":
             # Only select from results if the input is NOT focused
             focused = self.app.focused

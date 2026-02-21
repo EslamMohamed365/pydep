@@ -1827,6 +1827,8 @@ async def test_details_shows_dependencies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """Details panel should show dependency list from ``_get_package_requires``."""
+    import asyncio
+
     from app import DetailsPanel, DependencyManagerApp, PackagesPanel
 
     (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
@@ -1840,8 +1842,13 @@ async def test_details_shows_dependencies(
 
     app = DependencyManagerApp()
 
+    async def mock_fetch_meta(name: str) -> dict[str, object] | None:
+        return None
+
     async with app.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
+
+        monkeypatch.setattr(app, "_fetch_pypi_metadata", mock_fetch_meta)
 
         # Focus packages panel and select first package
         pkg_panel = app.query_one("#packages-panel", PackagesPanel)
@@ -1851,7 +1858,11 @@ async def test_details_shows_dependencies(
         # Navigate to trigger details update
         await pilot.press("j")
         await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
         await pilot.press("k")
+        await pilot.pause()
+        await asyncio.sleep(0.3)
         await pilot.pause()
 
         details = app.query_one("#details-panel", DetailsPanel)
@@ -1915,3 +1926,135 @@ async def test_search_pypi_parse_html():
     assert len(results) == 2
     assert results[0] == ("requests", "2.31.0", "HTTP for Humans")
     assert results[1] == ("httpx", "0.24.1", "A next-gen HTTP client")
+
+
+# ---------------------------------------------------------------------------
+# 23. Package documentation viewer (D key)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_open_docs_action(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Pressing ``D`` opens the documentation URL for the selected package."""
+    import asyncio
+
+    from app import DependencyManagerApp, PackagesPanel
+
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_UVLOCK)
+    monkeypatch.chdir(tmp_path)
+
+    app = DependencyManagerApp()
+
+    opened_urls: list[str] = []
+    monkeypatch.setattr("webbrowser.open", lambda url: opened_urls.append(url))
+
+    fake_meta: dict[str, object] = {
+        "info": {
+            "summary": "HTTP for Humans",
+            "project_url": "https://pypi.org/project/requests/",
+            "project_urls": {
+                "Documentation": "https://requests.readthedocs.io",
+                "Homepage": "https://requests.readthedocs.io",
+            },
+        },
+    }
+
+    async def mock_fetch(name: str) -> dict[str, object] | None:
+        return fake_meta
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+
+        monkeypatch.setattr(app, "_fetch_pypi_metadata", mock_fetch)
+
+        # Focus packages panel and select first package
+        pkg_panel = app.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
+        await pilot.pause()
+
+        await pilot.press("D")
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        assert len(opened_urls) == 1
+        assert opened_urls[0] == "https://requests.readthedocs.io"
+
+
+@pytest.mark.asyncio
+async def test_open_docs_no_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Pressing ``D`` without a selected package shows a warning notification."""
+    import asyncio
+
+    from app import DependencyManagerApp
+
+    monkeypatch.chdir(tmp_path)
+
+    app = DependencyManagerApp()
+
+    opened_urls: list[str] = []
+    monkeypatch.setattr("webbrowser.open", lambda url: opened_urls.append(url))
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+
+        await pilot.press("D")
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        # No URL should be opened
+        assert len(opened_urls) == 0
+
+
+@pytest.mark.asyncio
+async def test_details_shows_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Details panel should show PyPI summary when available."""
+    from app import DetailsPanel, DependencyManagerApp, PackagesPanel
+
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_UVLOCK)
+    monkeypatch.chdir(tmp_path)
+
+    async def mock_requires(name: str) -> list[str]:
+        return []
+
+    monkeypatch.setattr("app._get_package_requires", mock_requires)
+
+    fake_meta: dict[str, object] = {
+        "info": {"summary": "HTTP for Humans"},
+    }
+
+    app = DependencyManagerApp()
+
+    async def mock_fetch(name: str) -> dict[str, object] | None:
+        return fake_meta
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+
+        monkeypatch.setattr(app, "_fetch_pypi_metadata", mock_fetch)
+
+        # Focus packages panel and select first package
+        pkg_panel = app.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
+        await pilot.pause()
+
+        # Navigate to trigger details update
+        await pilot.press("j")
+        await pilot.pause()
+        import asyncio
+
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+        await pilot.press("k")
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        details = app.query_one("#details-panel", DetailsPanel)
+        rendered = str(details.render())
+
+        assert "Description" in rendered
+        assert "HTTP for Humans" in rendered

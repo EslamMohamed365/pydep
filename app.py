@@ -32,6 +32,7 @@ import re
 import shutil
 import sys
 import time
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
@@ -1043,6 +1044,7 @@ class DetailsPanel(PanelWidget):
         pkg: Package | None,
         latest_versions: dict[str, str] | None = None,
         requires: list[str] | None = None,
+        summary: str | None = None,
     ) -> None:
         if pkg is None:
             self.update("[#565f89]Select a package to view details[/]")
@@ -1090,6 +1092,12 @@ class DetailsPanel(PanelWidget):
             lines.append("  [#7aa2f7]Dependencies:[/]")
             for req in sorted(requires):
                 lines.append(f"    [#565f89]{req}[/]")
+
+        # Description from PyPI
+        if summary:
+            lines.append("")
+            lines.append("  [#7aa2f7]Description:[/]")
+            lines.append(f"    [#565f89]{summary}[/]")
 
         self.update("\n".join(lines))
 
@@ -1400,6 +1408,7 @@ _HELP_TEXT = """\
   [#9ece6a]U[/]               Update all outdated
   [#9ece6a]s[/]               Sync  (uv sync)
   [#9ece6a]L[/]               Lock  (uv lock)
+  [#9ece6a]D[/]               Open package docs
 
 [b #7aa2f7]GLOBAL[/]
   [#9ece6a]v[/]               Create virtual environment
@@ -1685,6 +1694,7 @@ class DependencyManagerApp(App):
         Binding("s", "sync", "Sync", priority=True),
         Binding("L", "lock", "Lock", priority=True),
         Binding("p", "search_pypi", "Search PyPI", priority=True),
+        Binding("D", "open_docs", "Docs", priority=True),
         Binding("question_mark", "show_help", "?Help", priority=True),
         Binding("q", "quit", "Quit", priority=True),
     ]
@@ -1695,6 +1705,7 @@ class DependencyManagerApp(App):
         self._packages: list[Package] = []
         self._filter: str = ""
         self._latest_versions: dict[str, str] = {}
+        self._pypi_cache: dict[str, dict[str, Any]] = {}
         # gg sequence state
         self._pending_g: bool = False
         self._pending_g_time: float = 0.0
@@ -2045,14 +2056,35 @@ class DependencyManagerApp(App):
 
     @work(exclusive=True, group="requires")
     async def _fetch_and_show_requires(self, pkg: Package) -> None:
-        """Fetch dependency list and re-render the details panel."""
+        """Fetch dependency list and PyPI summary, then re-render details."""
         requires = await _get_package_requires(pkg.name)
+        meta = await self._fetch_pypi_metadata(pkg.name)
+        summary: str | None = None
+        if meta:
+            summary = meta.get("info", {}).get("summary")
         # Re-check the selection hasn't changed while we were fetching
         pkg_panel = self.query_one("#packages-panel", PackagesPanel)
         current = pkg_panel.get_selected_package()
         if current is not None and _normalise(current.name) == _normalise(pkg.name):
             details = self.query_one("#details-panel", DetailsPanel)
-            details.show_package(pkg, self._latest_versions, requires=requires)
+            details.show_package(
+                pkg, self._latest_versions, requires=requires, summary=summary
+            )
+
+    async def _fetch_pypi_metadata(self, name: str) -> dict[str, Any] | None:
+        """Fetch and cache PyPI JSON metadata for ``name``."""
+        if name in self._pypi_cache:
+            return self._pypi_cache[name]
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"https://pypi.org/pypi/{name}/json")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    self._pypi_cache[name] = data
+                    return data
+        except Exception:
+            pass
+        return None
 
     def _on_source_selection_changed(self) -> None:
         """When the selected source changes, filter the packages panel."""
@@ -2184,6 +2216,28 @@ class DependencyManagerApp(App):
                 severity="information",
             )
         self._refresh_data()
+
+    @work(exclusive=True, group="docs")
+    async def action_open_docs(self) -> None:
+        """Open documentation URL for the selected package in a browser."""
+        pkg = self._selected_package()
+        if not pkg:
+            self.notify("Select a package first.", severity="warning")
+            return
+        meta = await self._fetch_pypi_metadata(pkg.name)
+        if not meta:
+            self.notify("Could not fetch package info", severity="error")
+            return
+        info = meta.get("info", {})
+        urls = info.get("project_urls") or {}
+        doc_url = (
+            urls.get("Documentation")
+            or urls.get("Homepage")
+            or info.get("project_url")
+            or f"https://pypi.org/project/{pkg.name}/"
+        )
+        webbrowser.open(doc_url)
+        self.notify(f"Opened {doc_url}", severity="information")
 
     def action_show_help(self) -> None:
         self.push_screen(HelpModal())

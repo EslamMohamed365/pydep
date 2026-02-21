@@ -1,197 +1,245 @@
-# PyDep
+<div align="center">
 
-A fully keyboard-driven terminal UI for managing Python project dependencies, powered by [uv](https://docs.astral.sh/uv/) and themed with the [Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme) color palette.
+```
+██████╗ ██╗   ██╗██████╗ ███████╗██████╗
+██╔══██╗╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗
+██████╔╝ ╚████╔╝ ██║  ██║█████╗  ██████╔╝
+██╔═══╝   ╚██╔╝  ██║  ██║██╔══╝  ██╔═══╝
+██║        ██║   ██████╔╝███████╗██║
+╚═╝        ╚═╝   ╚═════╝ ╚══════╝╚═╝
+```
 
-PyDep scans your project for dependencies across multiple sources — `pyproject.toml`, `requirements.txt`, `setup.py`, `setup.cfg`, `Pipfile`, and installed packages — and presents them in a lazygit-style multi-panel interface with Vim-style navigation.
+**A fully keyboard-driven terminal UI for Python dependency management**
+
+*lazygit-style panels · Vim keybindings · Tokyo Night theme · powered by uv*
+
+<br>
+
+[![Python](https://img.shields.io/badge/python-3.13+-blue?style=flat-square&logo=python&logoColor=white&color=7aa2f7)](https://python.org)
+[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square&color=9ece6a)](LICENSE)
+[![uv](https://img.shields.io/badge/uv-powered-orange?style=flat-square&color=e0af68)](https://docs.astral.sh/uv/)
+[![Textual](https://img.shields.io/badge/built%20with-Textual-purple?style=flat-square&color=bb9af7)](https://textual.textualize.io/)
+[![Tests](https://img.shields.io/badge/tests-109%20passing-brightgreen?style=flat-square&color=9ece6a)](test_app.py)
+
+</div>
+
+---
+
+<div align="center">
 
 ![PyDep Demo](demo.gif)
 
-## Features
+</div>
 
-- **Lazygit-style layout** — Multi-panel interface with Status, Sources, Packages, and Details panels. Navigate between panels with `Tab`/`Shift+Tab` or number keys (`1`/`2`/`3`)
-- **Multi-source scanning** — Aggregates dependencies from 6 sources into a single view, merging duplicates by normalized name (PEP 503)
-- **PEP 735 dependency groups** — Full support for `[dependency-groups]` in `pyproject.toml`, with a group selector in the Add modal
-- **Source filtering** — Select a source in the Sources panel to filter the Packages panel to only that source's dependencies. Filter-active indicator shown in the Packages panel title
-- **Vim-style navigation** — `j`/`k` movement, `gg` jump to top, `G` jump to bottom, `/` filter mode. Scroll-to-visible follows selection in all panels
-- **Keyboard-first** — No mouse required. Every action has a keybinding
-- **PyPI search** — Press `p` to search PyPI interactively with `j`/`k` navigation and install directly from results
-- **PyPI validation** — Async package/version verification before any install or update. Leave version blank to auto-resolve the latest
-- **Version constraint picker** — Choose version constraint operators (`==`, `>=`, `~=`) in Add and Update modals
-- **Outdated check** — Batch-query PyPI for the latest version of every package. Color-coded: green = up to date, yellow = outdated
-- **Update all outdated** — Press `U` to update all outdated packages at once with confirmation
-- **Package details** — Details panel shows package summary, dependencies, and source info. Press `D` to open full docs in your browser
-- **Sync & Lock** — Press `s` to run `uv sync`, `L` to run `uv lock`
-- **Source-aware deletion** — Remove a package from a specific source file. Multi-source packages prompt you to choose which source
-- **Improved source tags** — Compact source file indicators: pyproj, reqs, setup, etc.
-- **Virtual environment creation** — Press `v` to create a `.venv` via `uv venv`
-- **Loading indicators** — Visual feedback during all async operations (refresh, add, update, delete, outdated check, venv creation)
-- **uv integration** — Uses `uv add`, `uv remove`, `uv sync`, `uv lock`, `uv venv`, and `uv pip` under the hood
-- **Tokyo Night theme** — Consistent dark color palette across all UI elements
-- **Contextual hints** — Bottom hint bar updates based on which panel is focused
+---
 
-## Requirements
+## ✦ What is PyDep?
 
-- Python 3.13+
-- [uv](https://docs.astral.sh/uv/) on your `PATH`
+PyDep scans your project for dependencies across **6 sources** — `pyproject.toml`, `requirements.txt`, `setup.py`, `setup.cfg`, `Pipfile`, and your virtual environment — and presents them in a unified, lazygit-inspired multi-panel interface.
 
-## Installation
+No mouse. No menus. Just your keyboard, Vim motions, and instant access to everything.
+
+---
+
+## ✦ Features
+
+### 🗂 Interface & Navigation
+
+- **Lazygit-style layout** — Status, Sources, Packages, and Details panels, all in one view
+- **Vim motions** — <kbd>j</kbd>/<kbd>k</kbd> to move, <kbd>gg</kbd> to jump to top, <kbd>G</kbd> to bottom, <kbd>/</kbd> to filter
+- **Panel switching** — <kbd>Tab</kbd>/<kbd>Shift+Tab</kbd> to cycle panels, or jump directly with <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd>
+- **Contextual hints** — Bottom hint bar always shows relevant keys for the focused panel
+- **Tokyo Night theme** — Consistent dark color palette across every UI element
+
+### 📦 Package Management
+
+- **Multi-source scanning** — Aggregates all 6 sources into one view, merging duplicates by normalized name (PEP 503)
+- **Source filtering** — Focus a source in the Sources panel to filter packages to only that source
+- **PEP 735 dependency groups** — Full support for `[dependency-groups]` in `pyproject.toml`
+- **Version constraint picker** — Choose `==`, `>=`, or `~=` when adding or updating
+- **Source-aware deletion** — Multi-source packages prompt you to choose which source to remove from
+
+### 🔍 PyPI Integration
+
+- **Interactive search** — Press <kbd>p</kbd> to fuzzy-search PyPI, browse results with <kbd>j</kbd>/<kbd>k</kbd>, install with <kbd>Enter</kbd>
+- **Async validation** — Every install/update is verified against PyPI before running. Leave version blank to auto-resolve latest
+- **Outdated detection** — Press <kbd>o</kbd> to batch-query PyPI for all packages. Green = current, yellow = outdated
+- **Update all outdated** — Press <kbd>U</kbd> to update everything at once with a single confirmation
+
+### ⚡ uv Integration
+
+- **All `uv` commands** — `uv add`, `uv remove`, `uv sync`, `uv lock`, `uv venv`, `uv pip` under the hood
+- **Sync & Lock** — <kbd>s</kbd> to sync, <kbd>L</kbd> to lock
+- **Venv creation** — Press <kbd>v</kbd> to create `.venv` via `uv venv`
+- **Auto-init** — If no `pyproject.toml` exists, PyDep offers to run `uv init --bare`
+- **Loading indicators** — Visual feedback during every async operation
+
+---
+
+## ✦ Quick Start
 
 ```bash
+# 1. Clone
 git clone https://github.com/EslamMohamed365/pydep.git
 cd pydep
+
+# 2. Install dependencies
 uv sync
-```
 
-## Usage
-
-```bash
+# 3. Run
 uv run python app.py
 ```
 
-If no `pyproject.toml` exists in the current directory, PyDep will offer to initialize one via `uv init --bare`.
+---
 
-## Layout
+## ✦ Layout
 
+```text
+┌─ Status ────────────┐ ┌─ Details ──────────────────────────────────┐
+│ PyDep v0.1.0        │ │ Package: httpx                              │
+│ Python 3.13.11      │ │ Installed: 0.27.0                           │
+│ uv 0.7.12           │ │ Latest:    0.28.1                           │
+│ .venv ✓             │ │ Status:    Outdated                         │
+│ 12 packages         │ │                                             │
+│  3 sources          │ │ Sources:                                    │
+│  2 outdated         │ │   pyproject.toml:   >=0.27.0               │
+├─ Sources ───────────┤ │   requirements.txt: httpx==0.27.0          │
+│ ▸ All Sources       │ │                                             │
+│   pyproject.toml    │ │ Summary:                                    │
+│   requirements.txt  │ │   The next-generation HTTP client.          │
+├─ Packages ──────────┤ │                                             │
+│ ● httpx    0.27.0   │ │                                             │
+│   rich     13.9.4   │ │                                             │
+│   textual  1.0.0    │ └─────────────────────────────────────────────┘
+└─────────────────────┘
+  Tab:switch  j/k:nav  /:filter  a:add  d:del  u:upd  s:sync  p:search  ?:help
 ```
-┌─ Status ──────────┐┌─ Details ──────────────────────────────┐
-│ PyDep v0.1.0       ││ Package: httpx                         │
-│ Python 3.13.11     ││ Installed: 0.27.0                      │
-│ uv 0.7.12          ││ Latest: 0.28.1                         │
-│ .venv ✓            ││ Status: Outdated                       │
-│ 12 packages        ││                                        │
-│ 3 sources          ││ Sources:                               │
-│ 2 outdated         ││   pyproject.toml: >=0.27.0             │
-├─ Sources ─────────┤│   requirements.txt: httpx==0.27.0      │
-│ ▸ All Sources      ││                                        │
-│   pyproject.toml   ││                                        │
-│   requirements.txt ││                                        │
-├─ Packages ────────┤│                                        │
-│ ▸ httpx    0.27.0  ││                                        │
-│   rich     13.9.4  ││                                        │
-│   textual  1.0.0   ││                                        │
-└────────────────────┘└────────────────────────────────────────┘
- Tab:switch  j/k:nav  /:filter  a:add  d:del  u:upd  s:sync  p:search  ?:help
-```
 
-## Keybindings
+---
+
+## ✦ Keybindings
 
 ### Panel Navigation
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `Shift+Tab` | Cycle panel focus forward / backward |
-| `1` | Jump to Status panel |
-| `2` | Jump to Sources panel |
-| `3` | Jump to Packages panel |
+| <kbd>Tab</kbd> / <kbd>Shift+Tab</kbd> | Cycle panel focus forward / backward |
+| <kbd>1</kbd> | Jump to Status panel |
+| <kbd>2</kbd> | Jump to Sources panel |
+| <kbd>3</kbd> | Jump to Packages panel |
 
-### Within a Panel (Sources / Packages)
+### Within Sources / Packages
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` | Move selection down / up |
-| `G` | Jump to last item |
-| `g g` | Jump to first item |
-| `Enter` | Select source (Sources) / Update package (Packages) |
+| <kbd>j</kbd> / <kbd>k</kbd> | Move selection down / up |
+| <kbd>G</kbd> | Jump to last item |
+| <kbd>g</kbd> <kbd>g</kbd> | Jump to first item |
+| <kbd>Enter</kbd> | Select source · Update package |
 
 ### Global Actions
 
 | Key | Action |
 |-----|--------|
-| `/` | Open filter bar (filters packages by name) |
-| `a` | Add a package |
-| `p` | Search PyPI |
-| `u` | Update selected package |
-| `d` | Delete selected package |
-| `o` | Check outdated packages |
-| `U` | Update all outdated packages |
-| `s` | Sync (`uv sync`) |
-| `L` | Lock (`uv lock`) |
-| `D` | Open package docs in browser |
-| `r` | Refresh package list |
-| `v` | Create virtual environment (`uv venv`) |
-| `i` | Initialize project (`uv init --bare`) |
-| `?` | Toggle help overlay |
-| `q` | Quit |
+| <kbd>/</kbd> | Open filter bar |
+| <kbd>a</kbd> | Add a package |
+| <kbd>p</kbd> | Search PyPI |
+| <kbd>u</kbd> | Update selected package |
+| <kbd>d</kbd> | Delete selected package |
+| <kbd>o</kbd> | Check for outdated packages |
+| <kbd>U</kbd> | Update **all** outdated packages |
+| <kbd>s</kbd> | Sync — `uv sync` |
+| <kbd>L</kbd> | Lock — `uv lock` |
+| <kbd>D</kbd> | Open package docs in browser |
+| <kbd>r</kbd> | Refresh package list |
+| <kbd>v</kbd> | Create virtual environment |
+| <kbd>i</kbd> | Initialize project — `uv init --bare` |
+| <kbd>?</kbd> | Toggle help overlay |
+| <kbd>q</kbd> | Quit |
 
 ### Filter Mode
 
 | Key | Action |
 |-----|--------|
-| *any text* | Filter packages by name |
-| `Escape` | Clear filter and close |
-| `Enter` | Close filter (keep text) |
+| *type* | Filter packages by name in real time |
+| <kbd>Escape</kbd> | Clear filter and close |
+| <kbd>Enter</kbd> | Close filter bar (keep active filter) |
 
 ### Modals
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Next field |
-| `Enter` | Submit |
-| `Escape` | Cancel |
-| `y` / `n` | Yes / No (confirmation dialogs) |
+| <kbd>Tab</kbd> | Next field |
+| <kbd>Enter</kbd> | Submit |
+| <kbd>Escape</kbd> | Cancel |
+| <kbd>y</kbd> / <kbd>n</kbd> | Yes / No in confirmation dialogs |
 
-## Supported Dependency Sources
+---
 
-| Source | Parsed | Removal |
-|--------|--------|---------|
-| `pyproject.toml` | `[project].dependencies`, optional groups, and `[dependency-groups]` (PEP 735) | `uv remove` |
-| `requirements*.txt` | Line-by-line (skips comments/flags) | Line removal |
-| `setup.py` | AST-based `install_requires` extraction | Manual only (toast warning) |
+## ✦ Supported Dependency Sources
+
+| Source | What is parsed | Removal method |
+|--------|---------------|----------------|
+| `pyproject.toml` | `[project].dependencies`, optional groups, `[dependency-groups]` (PEP 735) | `uv remove` |
+| `requirements*.txt` | Line-by-line (skips comments and flags) | Line removal |
+| `setup.py` | `install_requires` via AST extraction | Manual (toast warning) |
 | `setup.cfg` | `[options].install_requires` via configparser | configparser edit |
 | `Pipfile` | `[packages]` + `[dev-packages]` via TOML | Key removal |
 | Virtual environment | `uv pip list --format json` | `uv pip uninstall` |
 
-## Project Structure
+---
+
+## ✦ Project Structure
 
 ```
 pydep/
-  app.py          # Application code: data model, parsers, panel widgets, modals, TUI
-  app.tcss        # Tokyo Night themed Textual CSS for multi-panel layout
-  test_app.py     # 109 headless tests (Textual pilot)
-  pyproject.toml  # Project metadata and dependencies
-  demo.tape       # VHS script for generating the demo GIF
+├── app.py          # Entire application — parsers, panels, modals, TUI (~2600 lines)
+├── app.tcss        # Tokyo Night themed Textual CSS for the multi-panel layout
+├── test_app.py     # 109 headless tests via Textual pilot
+├── pyproject.toml  # Project metadata and dependencies
+└── demo.tape       # VHS script for generating the demo GIF
 ```
 
-## Testing
+This is **not a package** — no `src/` layout, no `__init__.py`. Run directly with `uv run python app.py`.
+
+---
+
+## ✦ Testing
 
 ```bash
 uv run pytest test_app.py -v
 ```
 
-109 tests covering:
+**109 tests** covering parsers for all 6 sources, PEP 735 groups, PyPI validation, panel layout, Vim motions, Tab cycling, filter mode, all modals, source-aware deletion, outdated detection, update-all, PyPI search, sync/lock, venv creation, scroll-to-visible, and loading overlays.
 
-- All 6 dependency parsers (including missing-file edge cases)
-- PEP 735 `[dependency-groups]` parsing
-- Multi-source merge logic
-- PyPI validation (4 scenarios)
-- Panel existence and layout
-- Status panel info display and venv status
-- Sources panel population and source selection filtering
-- Details panel updates on package selection (summary, dependencies)
-- Vim motions (`j`/`k`/`G`/`gg`) in Packages and Sources panels
-- Tab cycling, Shift+Tab, and number-key panel jumping
-- Filter mode (open, close, escape, filtering) with filter indicator
-- Contextual hint bar updates
-- All modal interactions (Add, Update, Delete with version constraint picker)
-- Per-source removal functions
-- Source-aware deletion flow (single-source vs multi-source)
-- Outdated check (batch query, UI integration, status panel count)
-- Update all outdated with confirmation
-- PyPI search modal
-- Sync and Lock commands
-- Package docs viewer
-- Venv creation warning
-- Loading overlay
-- Scroll-to-visible behavior
+---
 
-## Contributing
+## ✦ Requirements
+
+- **Python 3.13+**
+- **[uv](https://docs.astral.sh/uv/)** on your `PATH`
+
+---
+
+## ✦ Contributing
 
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
+2. Create a feature branch — `git checkout -b feature/my-feature`
 3. Make your changes and add tests
-4. Run the test suite (`uv run pytest test_app.py -v`)
-5. Commit and open a pull request
+4. Run the suite — `uv run pytest test_app.py -v`
+5. Lint — `uv run ruff check app.py && uv run ruff format app.py`
+6. Open a pull request
 
-## License
+---
 
-MIT
+## ✦ License
+
+MIT — see [LICENSE](LICENSE).
+
+---
+
+<div align="center">
+
+*Built with [Textual](https://textual.textualize.io/) · Powered by [uv](https://docs.astral.sh/uv/) · Themed with [Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme)*
+
+</div>

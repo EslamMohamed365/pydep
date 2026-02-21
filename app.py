@@ -616,6 +616,18 @@ def _get_python_version() -> str:
     return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
 
 
+def _get_app_version() -> str:
+    """Read version from ``pyproject.toml``."""
+    try:
+        pyproject = Path(__file__).parent / "pyproject.toml"
+        if pyproject.exists():
+            data = tomllib.loads(pyproject.read_text())
+            return data.get("project", {}).get("version", "0.0.0")
+    except Exception:
+        pass
+    return "0.0.0"
+
+
 async def _get_uv_version() -> str:
     """Return the installed uv version string."""
     try:
@@ -709,7 +721,7 @@ class StatusPanel(PanelWidget):
         venv_ok = _venv_exists()
 
         lines: list[str] = []
-        lines.append(f"[bold #7aa2f7]PyDep[/] [#565f89]v0.1.0[/]")
+        lines.append(f"[bold #7aa2f7]PyDep[/] [#565f89]v{_get_app_version()}[/]")
         lines.append(f"[#c0caf5]Python[/] [#9ece6a]{python_ver}[/]")
         lines.append(f"[#c0caf5]uv[/]     [#9ece6a]{uv_ver}[/]")
 

@@ -633,7 +633,7 @@ async def _fetch_pypi_index() -> list[str]:
     return names
 
 
-async def _search_pypi_index(query: str, limit: int = 20) -> list[tuple[str, str, str]]:
+async def _search_pypi_index(query: str, limit: int = 10) -> list[tuple[str, str, str]]:
     """Search PyPI index for packages matching query."""
     names = await _fetch_pypi_index()
     q = query.lower()
@@ -1718,24 +1718,6 @@ class SearchPyPIModal(ModalScreen[str | None]):
             event.prevent_default()
             event.stop()
             self._selected = max(self._selected - 1, 0)
-            self._render_results()
-            self.query_one("#search-results", Static).scroll_to(
-                0, max(0, self._selected - 3), animate=False
-            )
-            return
-        if key == "pagedown":
-            event.prevent_default()
-            event.stop()
-            self._selected = min(self._selected + 5, len(self._results) - 1)
-            self._render_results()
-            self.query_one("#search-results", Static).scroll_to(
-                0, max(0, self._selected - 3), animate=False
-            )
-            return
-        if key == "pageup":
-            event.prevent_default()
-            event.stop()
-            self._selected = max(self._selected - 5, 0)
             self._render_results()
             self.query_one("#search-results", Static).scroll_to(
                 0, max(0, self._selected - 3), animate=False

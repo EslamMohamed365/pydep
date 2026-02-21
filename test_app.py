@@ -755,8 +755,8 @@ async def test_vim_j_k_in_sources(app_with_deps):
 
 @pytest.mark.asyncio
 async def test_tab_cycles_panels(app_with_deps):
-    """Tab cycles all four panels: Status -> Sources -> Packages -> Details."""
-    from app import DetailsPanel, PackagesPanel, SourcesPanel, StatusPanel
+    """Tab cycles through Status -> Sources -> Packages panels."""
+    from app import PackagesPanel, SourcesPanel, StatusPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
@@ -764,12 +764,7 @@ async def test_tab_cycles_panels(app_with_deps):
         pkg_panel.focus()
         await pilot.pause()
 
-        # Packages (idx 2) -> Details (idx 3)
-        await pilot.press("tab")
-        await pilot.pause()
-        assert isinstance(app_with_deps.focused, DetailsPanel)
-
-        # Details (idx 3) -> Status (idx 0)
+        # Packages (idx 2) -> Status (idx 0)
         await pilot.press("tab")
         await pilot.pause()
         assert isinstance(app_with_deps.focused, StatusPanel)
@@ -784,10 +779,31 @@ async def test_tab_cycles_panels(app_with_deps):
         await pilot.pause()
         assert isinstance(app_with_deps.focused, PackagesPanel)
 
-        # 4 -> Details
-        await pilot.press("4")
+        #  Cycle back to Status ensures wrap correctness (optional)
+
+
+@pytest.mark.asyncio
+async def test_number_keys_jump_panels(app_with_deps):
+    """Number keys jump to the corresponding panels."""
+    from app import PackagesPanel, SourcesPanel, StatusPanel
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        assert isinstance(app_with_deps.focused, DetailsPanel)
+        pkg_panel = app_with_deps.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
+        await pilot.pause()
+
+        await pilot.press("1")
+        await pilot.pause()
+        assert isinstance(app_with_deps.focused, StatusPanel)
+
+        await pilot.press("2")
+        await pilot.pause()
+        assert isinstance(app_with_deps.focused, SourcesPanel)
+
+        await pilot.press("3")
+        await pilot.pause()
+        assert isinstance(app_with_deps.focused, PackagesPanel)
 
 
 # 9. Filter mode
@@ -2310,8 +2326,8 @@ def test_parse_lock_normalises_names(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_shift_tab_cycles_panels_reverse(app_with_deps):
-    """Shift+Tab should cycle panels in reverse order through all four panels."""
-    from app import DetailsPanel, PackagesPanel, SourcesPanel, StatusPanel
+    """Shift+Tab should cycle panels in reverse order through the remaining panels."""
+    from app import PackagesPanel, SourcesPanel, StatusPanel
 
     async with app_with_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
@@ -2330,11 +2346,6 @@ async def test_shift_tab_cycles_panels_reverse(app_with_deps):
         await pilot.press("shift+tab")
         await pilot.pause()
         assert isinstance(app_with_deps.focused, StatusPanel)
-
-        # Shift+Tab -> Details (idx 3, wraps)
-        await pilot.press("shift+tab")
-        await pilot.pause()
-        assert isinstance(app_with_deps.focused, DetailsPanel)
 
         # Shift+Tab -> Packages (idx 2)
         await pilot.press("shift+tab")

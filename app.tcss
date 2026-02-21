@@ -46,10 +46,18 @@ PanelWidget, StatusPanel, SourcesPanel, PackagesPanel, DetailsPanel {
 
 .panel-active {
     border: round #7aa2f7;
+    background: #1e2030;
+    transition: border 200ms, background 200ms;
 }
 
 .panel-inactive {
     border: round #3b4261;
+    background: #1a1b26;
+    transition: border 200ms, background 200ms;
+}
+
+.filter-active {
+    border: round #e0af68;
 }
 
 /* --- Status Panel --- */
@@ -128,7 +136,7 @@ PanelWidget, StatusPanel, SourcesPanel, PackagesPanel, DetailsPanel {
     width: 100%;
     height: 100%;
     align: center middle;
-    background: #1a1b26 60%;
+    background: #1a1b26 75%;
     layer: overlay;
     display: none;
 }
@@ -144,6 +152,7 @@ LoadingIndicator {
     text-align: center;
     margin: 1 0 0 0;
     background: transparent;
+    text-style: bold;
 }
 
 /* --- Modal Screens --- */
@@ -212,6 +221,7 @@ ModalScreen {
     background: #1a3a1a;
     color: #9ece6a;
     border: tall #9ece6a 40%;
+    min-width: 16;
 }
 
 #modal-btn-ok:hover {
@@ -299,13 +309,32 @@ Toast {
     border: tall #3b4261;
 }
 
+Toast.-error {
+    border: tall #f7768e;
+}
+
+Toast.-warning {
+    border: tall #e0af68;
+}
+
+Toast.-information {
+    border: tall #7aa2f7;
+}
+
+Toast.-success {
+    border: tall #9ece6a;
+}
+
 /* --- Validation error label in modals --- */
 
 #validation-error {
     color: #f7768e;
+    background: #3a1a1a 40%;
     text-align: center;
     height: auto;
+    padding: 0 1;
     margin: 0 0 1 0;
+    border: round #f7768e 30%;
 }
 
 /* --- Help Modal --- */

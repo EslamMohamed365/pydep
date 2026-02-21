@@ -605,6 +605,78 @@ async def _fetch_latest_versions(
     return dict(results)
 
 
+async def _fetch_pypi_index() -> list[str]:
+    """Fetch and cache the PyPI package name list from the Simple API."""
+    import time as _time
+
+    cache_dir = Path.home() / ".cache" / "pydep"
+    cache_file = cache_dir / "pypi_index.json"
+
+    if cache_file.exists():
+        try:
+            data = json.loads(cache_file.read_text())
+            if _time.time() - data.get("ts", 0) < 86400:
+                return data.get("names", [])
+        except Exception:
+            pass
+
+    url = "https://pypi.org/simple/"
+    headers = {"Accept": "application/vnd.pypi.simple.v1+json"}
+    resp = await asyncio.to_thread(requests.get, url, headers=headers, timeout=(5, 30))
+    resp.raise_for_status()
+    projects = resp.json().get("projects", [])
+    names = [p["name"] for p in projects]
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(json.dumps({"ts": _time.time(), "names": names}))
+
+    return names
+
+
+async def _search_pypi_index(query: str, limit: int = 20) -> list[tuple[str, str, str]]:
+    """Search PyPI index for packages matching query."""
+    names = await _fetch_pypi_index()
+    q = query.lower()
+
+    def _score(name: str) -> int:
+        n = name.lower()
+        if n == q:
+            return 0
+        if n.startswith(q):
+            return 1
+        if q in n:
+            return 2
+        return 99
+
+    matches = [n for n in names if q in n.lower()]
+    matches.sort(key=_score)
+    top = matches[:limit]
+
+    if not top:
+        return []
+
+    sem = asyncio.Semaphore(5)
+
+    async def _fetch_one(name: str) -> tuple[str, str, str]:
+        async with sem:
+            try:
+                url = f"https://pypi.org/pypi/{name}/json"
+                resp = await asyncio.to_thread(requests.get, url, timeout=(3.05, 8))
+                if resp.status_code == 200:
+                    info = resp.json().get("info", {})
+                    return (
+                        info.get("name", name),
+                        info.get("version", ""),
+                        info.get("summary", "")[:80],
+                    )
+            except Exception:
+                pass
+            return (name, "", "")
+
+    results = await asyncio.gather(*[_fetch_one(n) for n in top])
+    return list(results)
+
+
 # =============================================================================
 # Environment Info Helpers
 # =============================================================================
@@ -712,9 +784,11 @@ class PanelWidget(Static):
         if active:
             self.add_class("panel-active")
             self.remove_class("panel-inactive")
+            self.border_subtitle = "[b #7aa2f7]● focused[/]"
         else:
             self.remove_class("panel-active")
             self.add_class("panel-inactive")
+            self.border_subtitle = ""
 
     def watch_panel_title(self, title: str) -> None:
         self.border_title = title
@@ -744,23 +818,24 @@ class StatusPanel(PanelWidget):
         uv_ver = uv_version
         venv_ok = _venv_exists()
 
-        lines: list[str] = []
-        lines.append(f"[bold #7aa2f7]PyDep[/] [#565f89]v{_get_app_version()}[/]")
-        lines.append(f"[#c0caf5]Python[/] [#9ece6a]{python_ver}[/]")
-        lines.append(f"[#c0caf5]uv[/]     [#9ece6a]{uv_ver}[/]")
+        app_version = _get_app_version()
+        divider = "[#3b4261]──────────────────────[/]"
+        venv_icon = "[#9ece6a]✓[/]" if venv_ok else "[#f7768e]✗[/]"
+        venv_label = "[#9ece6a].venv[/]" if venv_ok else "[#f7768e]No venv[/]"
 
-        if venv_ok:
-            lines.append("[#c0caf5]venv:[/]  [#9ece6a].venv \u2713[/]")
-        else:
-            lines.append("[#c0caf5]venv:[/]  [#f7768e]No venv[/]")
-
-        lines.append(f"[#c0caf5]{pkg_count}[/] [#565f89]packages[/]")
-        if source_count:
-            lines.append(
-                f"[#c0caf5]{source_count}[/] [#565f89]source{'s' if source_count != 1 else ''}[/]"
-            )
+        pkg_line = f"[#565f89]Packages:[/] [#7aa2f7]{pkg_count}[/]"
         if outdated_count:
-            lines.append(f"[#e0af68]{outdated_count}[/] [#565f89]outdated[/]")
+            pkg_line += f"  │  [#565f89]outdated:[/] [#7aa2f7]{outdated_count}[/]"
+
+        lines: list[str] = [
+            f"[bold #7aa2f7]PyDep[/] [#565f89]v{app_version}[/]",
+            divider,
+            f"[#565f89]Python[/] [#c0caf5]{python_ver}[/]  │  [#565f89]uv[/] [#c0caf5]{uv_ver}[/]",
+            f"[#565f89]venv:[/]  {venv_icon} {venv_label}",
+            divider,
+            pkg_line,
+            f"[#565f89]Sources:[/]  [#7aa2f7]{source_count}[/]",
+        ]
 
         self._info_text = "\n".join(lines)
         self.update(self._info_text)
@@ -795,12 +870,21 @@ class SourcesPanel(PanelWidget):
 
     def _render_list(self) -> None:
         lines: list[str] = []
+        if not self._sources:
+            lines.append("[#565f89] No sources detected[/]")
+            lines.append(
+                "[#565f89] [#9ece6a]r[/] refresh  [#9ece6a]i[/] init project[/]"
+            )
+            self.update("\n".join(lines))
+            return
+
         for i, src in enumerate(self._sources):
             marker = "\u25b8" if i == self.selected_index else " "
+            color = "#7aa2f7" if i == 0 else _source_color(src)
             if i == self.selected_index:
-                lines.append(f"[#c0caf5]{marker} {src}[/]")
+                lines.append(f"[b {color}]{marker} {src}[/]")
             else:
-                lines.append(f"[#565f89]{marker} {src}[/]")
+                lines.append(f"[#565f89]{marker}[/] [{color}]{src}[/]")
         self.update("\n".join(lines))
 
     def move_up(self) -> None:
@@ -910,6 +994,10 @@ class PackagesPanel(PanelWidget):
             self.border_title = f"Packages [{count}] [filter: {self._filter}]"
         else:
             self.border_title = f"Packages [{count}]"
+        if self._filter:
+            self.add_class("filter-active")
+        else:
+            self.remove_class("filter-active")
         self._render_list()
 
     def _render_list(self) -> None:
@@ -920,35 +1008,47 @@ class PackagesPanel(PanelWidget):
             latest = self._latest_versions.get(norm, "")
             ver = pkg.installed_version or "-"
 
-            # Color based on outdated status
             if pkg.installed_version and latest:
                 if pkg.installed_version == latest:
-                    ver_style = "#9ece6a"  # green
+                    ver_style = "#9ece6a"
+                    icon = "●"
+                    icon_color = "#9ece6a"
                 else:
-                    ver_style = "#e0af68"  # yellow
+                    ver_style = "#e0af68"
+                    icon = "●"
+                    icon_color = "#e0af68"
             elif pkg.installed_version:
                 ver_style = "#9ece6a"
+                icon = "●"
+                icon_color = "#9ece6a"
             else:
                 ver_style = "#565f89"
+                icon = "○"
+                icon_color = "#565f89"
 
-            # Source indicators
             src_tags = " ".join(_source_abbrev(s.file) for s in pkg.sources)
 
             if i == self.selected_index:
                 lines.append(
                     f"[#c0caf5]{marker} {pkg.name:<20}[/]"
-                    f" [{ver_style}]{ver:<12}[/]"
+                    f" [{icon_color}]{icon}[/]"
+                    f" [{ver_style}]{ver:<10}[/]"
                     f" [#565f89]{src_tags}[/]"
                 )
             else:
                 lines.append(
                     f"[#565f89]{marker}[/] [#8893b3]{pkg.name:<20}[/]"
-                    f" [{ver_style}]{ver:<12}[/]"
+                    f" [{icon_color}]{icon}[/]"
+                    f" [{ver_style}]{ver:<10}[/]"
                     f" [#3b4261]{src_tags}[/]"
                 )
 
         if not lines:
-            lines.append("[#565f89] No packages[/]")
+            lines.append("[#565f89] No packages found[/]")
+            lines.append("[#3b4261] ───────────────────────[/]")
+            lines.append(
+                "[#565f89] [#9ece6a]a[/] add  [#9ece6a]p[/] search PyPI  [#9ece6a]i[/] init  [#9ece6a]r[/] refresh[/]"
+            )
 
         self.update("\n".join(lines))
 
@@ -1000,7 +1100,7 @@ class DetailsPanel(PanelWidget):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(title="Details", id="details-panel", **kwargs)
-        self.can_focus = True
+        self.can_focus = False
 
     def on_mount(self) -> None:
         self.border_title = "Details"
@@ -1013,6 +1113,10 @@ class DetailsPanel(PanelWidget):
         latest_versions: dict[str, str] | None = None,
         requires: list[str] | None = None,
         summary: str | None = None,
+        license_str: str | None = None,
+        homepage: str | None = None,
+        requires_python: str | None = None,
+        author: str | None = None,
     ) -> None:
         if pkg is None:
             self.update("[#565f89]Select a package to view details[/]")
@@ -1060,6 +1164,26 @@ class DetailsPanel(PanelWidget):
             lines.append("  [#7aa2f7]Dependencies:[/]")
             for req in sorted(requires):
                 lines.append(f"    [#565f89]{req}[/]")
+
+        metadata_items: list[tuple[str, str]] = []
+        if license_str:
+            metadata_items.append(("License:", license_str))
+        if requires_python:
+            metadata_items.append(("Requires Py:", requires_python))
+        if author:
+            metadata_items.append(("Author:", author))
+        if homepage:
+            display_homepage = (
+                homepage if len(homepage) <= 50 else f"{homepage[:47]}..."
+            )
+            metadata_items.append(("Homepage:", display_homepage))
+
+        if metadata_items:
+            lines.append("")
+            lines.append("  [b #7aa2f7]Metadata[/]")
+            lines.append("  [#3b4261]─────────────────────────────[/]")
+            for label, value in metadata_items:
+                lines.append(f"  [#565f89]{label:<16}[/] [#c0caf5]{value}[/]")
 
         # Description from PyPI
         if summary:
@@ -1354,12 +1478,9 @@ class UpdatePackageModal(PackageModal):
     _modal_title: ClassVar[str] = "Update Package"
 
 
-# ---------------------------------------------------------------------------
-
-
 _HELP_TEXT = """\
 [b #7aa2f7]NAVIGATION[/]
-  [#9ece6a]Tab[/]             Cycle panels (Status, Sources, Packages, Details)
+  [#9ece6a]Tab[/]             Cycle panels (Status → Sources → Packages)
   [#9ece6a]Shift+Tab[/]       Previous panel
   [#9ece6a]1[/] / [#9ece6a]2[/] / [#9ece6a]3[/]       Jump to Status / Sources / Packages
   [#9ece6a]j[/] / [#9ece6a]k[/]           Move down / up
@@ -1515,7 +1636,7 @@ class SearchPyPIModal(ModalScreen[str | None]):
             yield Static("", id="search-status")
             yield Static("", id="search-results")
             yield Static(
-                "[#565f89]Enter search  ·  j/k navigate  ·  Enter select  ·  Esc cancel[/]",
+                "[#565f89]Type to search PyPI  ·  Enter search  ·  j/k navigate  ·  Enter select  ·  Esc cancel[/]",
                 id="search-pypi-hint",
             )
 
@@ -1533,12 +1654,20 @@ class SearchPyPIModal(ModalScreen[str | None]):
     async def _do_search(self, query: str) -> None:
         """Run PyPI search in background."""
         status = self.query_one("#search-status", Static)
-        status.update("[#7aa2f7]Searching...[/]")
+        cache_file = Path.home() / ".cache" / "pydep" / "pypi_index.json"
+
+        if not cache_file.exists():
+            status.update("[#e0af68]Building search index (first run, ~15s)...[/]")
+        else:
+            status.update("[#7aa2f7]Searching...[/]")
         self._results = []
         self._selected = 0
         self._render_results()
 
-        results = await self._search_pypi(query)
+        try:
+            results = await _search_pypi_index(query)
+        except Exception:
+            results = []
         self._results = results
         self._selected = 0
 
@@ -1549,22 +1678,6 @@ class SearchPyPIModal(ModalScreen[str | None]):
         else:
             status.update("[#f7768e]No results found[/]")
         self._render_results()
-
-    async def _search_pypi(self, query: str) -> list[tuple[str, str, str]]:
-        """Search PyPI by exact name via JSON API."""
-        url = f"https://pypi.org/pypi/{query}/json"
-        try:
-            resp = await asyncio.to_thread(requests.get, url, timeout=(3.05, 10))
-            if resp.status_code != 200:
-                return []
-            data = resp.json()
-            info = data.get("info", {})
-            name = info.get("name", query)
-            version = info.get("version", "")
-            summary = info.get("summary", "")
-            return [(name, version, summary)]
-        except Exception:
-            return []
 
     def _render_results(self) -> None:
         """Render the results list with highlighted selection."""
@@ -1665,7 +1778,6 @@ class DependencyManagerApp(App):
             "status-panel",
             "sources-panel",
             "packages-panel",
-            "details-panel",
         ]
         self._current_panel_idx: int = 2  # start on packages
 
@@ -1938,6 +2050,25 @@ class DependencyManagerApp(App):
                 "[#9ece6a]?[/] [#565f89]help[/]  "
                 "[#9ece6a]q[/] [#565f89]quit[/]"
             )
+        elif isinstance(focused, Input) and focused.id == "filter-input":
+            hint.update(
+                "[b #e0af68]Filter Mode[/]  "
+                "[#565f89]│[/]  "
+                "[#9ece6a]Esc[/] clear & close  "
+                "[#565f89]│[/]  "
+                "[#9ece6a]Enter[/] keep filter  "
+                "[#565f89]│[/]  type to filter in real time"
+            )
+        elif hasattr(focused, "id") and getattr(focused, "id", None) == "details-panel":
+            hint.update(
+                "[#9ece6a]D[/] open docs  "
+                "[#565f89]│[/]  "
+                "[#9ece6a]Tab[/] next panel  "
+                "[#565f89]│[/]  "
+                "[#9ece6a]?[/] help  "
+                "[#565f89]│[/]  "
+                "[#9ece6a]q[/] quit"
+            )
         else:
             hint.update(
                 "[#9ece6a]Tab[/] [#565f89]cycle panels[/]  "
@@ -2016,15 +2147,31 @@ class DependencyManagerApp(App):
         requires = await _get_package_requires(pkg.name)
         meta = await self._fetch_pypi_metadata(pkg.name)
         summary: str | None = None
+        license_str: str | None = None
+        homepage: str | None = None
+        requires_python: str | None = None
+        author: str | None = None
         if meta:
-            summary = meta.get("info", {}).get("summary")
+            info = meta.get("info", {})
+            summary = info.get("summary")
+            license_str = info.get("license")
+            homepage = info.get("home_page")
+            requires_python = info.get("requires_python")
+            author = info.get("author")
         # Re-check the selection hasn't changed while we were fetching
         pkg_panel = self.query_one("#packages-panel", PackagesPanel)
         current = pkg_panel.get_selected_package()
         if current is not None and _normalise(current.name) == _normalise(pkg.name):
             details = self.query_one("#details-panel", DetailsPanel)
             details.show_package(
-                pkg, self._latest_versions, requires=requires, summary=summary
+                pkg,
+                self._latest_versions,
+                requires=requires,
+                summary=summary,
+                license_str=license_str,
+                homepage=homepage,
+                requires_python=requires_python,
+                author=author,
             )
 
     async def _fetch_pypi_metadata(self, name: str) -> dict[str, Any]:
@@ -2291,7 +2438,9 @@ class DependencyManagerApp(App):
             return
         self.push_screen(
             ConfirmModal(f"Add '{result}' to project?"),
-            lambda confirmed: self._on_search_confirm(result, confirmed),
+            lambda confirmed: self._on_search_confirm(
+                result, confirmed if confirmed is not None else False
+            ),
         )
 
     def _on_search_confirm(self, package: str, confirmed: bool) -> None:

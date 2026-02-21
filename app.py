@@ -1678,6 +1678,8 @@ class SearchPyPIModal(ModalScreen[str | None]):
         else:
             status.update("[#f7768e]No results found[/]")
         self._render_results()
+        if self._results:
+            self.query_one("#search-query", Input).blur()
 
     def _render_results(self) -> None:
         """Render the results list with highlighted selection."""
@@ -1708,12 +1710,18 @@ class SearchPyPIModal(ModalScreen[str | None]):
             event.stop()
             self._selected = min(self._selected + 1, len(self._results) - 1)
             self._render_results()
+            self.query_one("#search-results", Static).scroll_to(
+                0, max(0, self._selected - 3), animate=False
+            )
             return
         if key == "k" or key == "up":
             event.prevent_default()
             event.stop()
             self._selected = max(self._selected - 1, 0)
             self._render_results()
+            self.query_one("#search-results", Static).scroll_to(
+                0, max(0, self._selected - 3), animate=False
+            )
             return
         if key == "enter":
             # Only select from results if the input is NOT focused

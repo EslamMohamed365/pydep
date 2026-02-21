@@ -447,6 +447,7 @@ Toast.-success {
     padding: 0 1;
     height: auto;
     max-height: 18;
+    overflow-y: auto;
 }
 
 #search-pypi-hint {

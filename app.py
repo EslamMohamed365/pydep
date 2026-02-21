@@ -131,6 +131,7 @@ class PackageManager:
         self,
         package: str,
         version: str | None = None,
+        constraint: str = "==",
         group: str | None = None,
     ) -> tuple[bool, str]:
         """Add or update a dependency.
@@ -142,7 +143,10 @@ class PackageManager:
         args: list[str] = ["add"]
         if group and group != "main":
             args.extend(["--group", group])
-        spec = f"{package}=={version}" if version else package
+        if version:
+            spec = f"{package}{constraint}{version}"
+        else:
+            spec = package
         args.append(spec)
         return await self._run(*args)
 
@@ -1133,7 +1137,7 @@ class ConfirmModal(ModalScreen[bool]):
 # ---------------------------------------------------------------------------
 
 
-class PackageModal(ModalScreen[tuple[str, str] | None]):
+class PackageModal(ModalScreen[tuple[str, str, str] | None]):
     """Base add / update modal with PyPI validation."""
 
     _modal_title: ClassVar[str] = "Package"
@@ -1172,6 +1176,12 @@ class PackageModal(ModalScreen[tuple[str, str] | None]):
                 id="input-version",
             )
 
+            yield Static("Constraint  (blank = ==)", classes="modal-label")
+            yield Input(
+                placeholder="==",
+                id="constraint-input",
+            )
+
             yield Static("", id="validation-error")
 
             with Horizontal(id="modal-buttons"):
@@ -1195,10 +1205,12 @@ class PackageModal(ModalScreen[tuple[str, str] | None]):
     async def _submit(self) -> None:
         name_input = self.query_one("#input-name", Input)
         version_input = self.query_one("#input-version", Input)
+        constraint_input = self.query_one("#constraint-input", Input)
         error_label = self.query_one("#validation-error", Static)
 
         name = name_input.value.strip()
         version_raw = version_input.value.strip() or None
+        constraint = constraint_input.value.strip() or "=="
 
         if not name:
             error_label.update("Package name cannot be empty.")
@@ -1213,13 +1225,13 @@ class PackageModal(ModalScreen[tuple[str, str] | None]):
             return
 
         error_label.update("")
-        self.dismiss((name, resolved or ""))
+        self.dismiss((name, resolved or "", constraint))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
 
 
-class AddPackageModal(ModalScreen[tuple[str, str, str] | None]):
+class AddPackageModal(ModalScreen[tuple[str, str, str, str] | None]):
     """Add-package modal with an extra dependency-group field."""
 
     _modal_title: ClassVar[str] = "Add Package"
@@ -1258,6 +1270,12 @@ class AddPackageModal(ModalScreen[tuple[str, str, str] | None]):
                 id="input-version",
             )
 
+            yield Static("Constraint  (blank = ==)", classes="modal-label")
+            yield Input(
+                placeholder="==",
+                id="constraint-input",
+            )
+
             yield Static("Group  (blank = main)", classes="modal-label")
             yield Input(
                 placeholder="main",
@@ -1287,11 +1305,13 @@ class AddPackageModal(ModalScreen[tuple[str, str, str] | None]):
     async def _submit(self) -> None:
         name_input = self.query_one("#input-name", Input)
         version_input = self.query_one("#input-version", Input)
+        constraint_input = self.query_one("#constraint-input", Input)
         group_input = self.query_one("#group-input", Input)
         error_label = self.query_one("#validation-error", Static)
 
         name = name_input.value.strip()
         version_raw = version_input.value.strip() or None
+        constraint = constraint_input.value.strip() or "=="
         group = group_input.value.strip() or "main"
 
         if not name:
@@ -1307,7 +1327,7 @@ class AddPackageModal(ModalScreen[tuple[str, str, str] | None]):
             return
 
         error_label.update("")
-        self.dismiss((name, resolved or "", group))
+        self.dismiss((name, resolved or "", constraint, group))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -1962,17 +1982,19 @@ class DependencyManagerApp(App):
             return
         self.push_screen(AddPackageModal(), callback=self._on_add_result)
 
-    def _on_add_result(self, result: tuple[str, str, str] | None) -> None:
+    def _on_add_result(self, result: tuple[str, str, str, str] | None) -> None:
         if result is not None:
             self._do_add(result)
 
     @work(exclusive=True, group="manage")
-    async def _do_add(self, result: tuple[str, str, str]) -> None:
-        name, version, group = result
-        label = f"{name}=={version}" if version else name
+    async def _do_add(self, result: tuple[str, str, str, str]) -> None:
+        name, version, constraint, group = result
+        label = f"{name}{constraint}{version}" if version else name
         self._show_loading(f"Adding {label}...")
 
-        ok, output = await self.pkg_mgr.add(name, version or None, group or None)
+        ok, output = await self.pkg_mgr.add(
+            name, version or None, constraint=constraint, group=group or None
+        )
         self._hide_loading()
 
         if ok:
@@ -2003,17 +2025,19 @@ class DependencyManagerApp(App):
             callback=self._on_update_result,
         )
 
-    def _on_update_result(self, result: tuple[str, str] | None) -> None:
+    def _on_update_result(self, result: tuple[str, str, str] | None) -> None:
         if result is not None:
             self._do_update(result)
 
     @work(exclusive=True, group="manage")
-    async def _do_update(self, result: tuple[str, str]) -> None:
-        name, version = result
-        label = f"{name}=={version}" if version else name
+    async def _do_update(self, result: tuple[str, str, str]) -> None:
+        name, version, constraint = result
+        label = f"{name}{constraint}{version}" if version else name
         self._show_loading(f"Updating {label}...")
 
-        ok, output = await self.pkg_mgr.add(name, version or None)
+        ok, output = await self.pkg_mgr.add(
+            name, version or None, constraint=constraint
+        )
         self._hide_loading()
 
         if ok:

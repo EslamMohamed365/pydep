@@ -953,6 +953,52 @@ async def test_add_modal_has_group_selector(app_with_deps):
 
 
 @pytest.mark.asyncio
+async def test_add_modal_has_constraint_picker(app_with_deps):
+    """Add modal contains a constraint-input field with correct defaults."""
+    from app import AddPackageModal, Input
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        pkg_panel = app_with_deps.query_one("#packages-panel")
+        pkg_panel.focus()
+        await pilot.pause()
+
+        # Open the Add modal
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert isinstance(app_with_deps.screen, AddPackageModal)
+
+        # Constraint input should exist with placeholder "=="
+        constraint_input = app_with_deps.screen.query_one("#constraint-input", Input)
+        assert constraint_input is not None
+        assert constraint_input.placeholder == "=="
+
+
+@pytest.mark.asyncio
+async def test_update_modal_has_constraint_picker(app_with_deps):
+    """Update modal contains a constraint-input field with correct defaults."""
+    from app import Input, UpdatePackageModal
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        pkg_panel = app_with_deps.query_one("#packages-panel")
+        pkg_panel.focus()
+        await pilot.pause()
+
+        # Open the Update modal
+        await pilot.press("u")
+        await pilot.pause()
+
+        assert isinstance(app_with_deps.screen, UpdatePackageModal)
+
+        # Constraint input should exist with placeholder "=="
+        constraint_input = app_with_deps.screen.query_one("#constraint-input", Input)
+        assert constraint_input is not None
+        assert constraint_input.placeholder == "=="
+
+
+@pytest.mark.asyncio
 async def test_update_modal_opens(app_with_deps):
     """u opens the Update Package modal when a package is selected."""
     async with app_with_deps.run_test(size=(140, 30)) as pilot:

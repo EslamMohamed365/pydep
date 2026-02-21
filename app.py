@@ -30,7 +30,6 @@ import asyncio
 import json
 import re
 import shutil
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -617,22 +616,23 @@ def _get_python_version() -> str:
     return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
 
 
-def _get_uv_version() -> str:
-    """Return the uv version string, or 'unknown'."""
-    uv = shutil.which("uv")
-    if not uv:
-        return "unknown"
+async def _get_uv_version() -> str:
+    """Return the installed uv version string."""
     try:
-        result = subprocess.run(
-            [uv, "--version"], capture_output=True, text=True, timeout=5
+        proc = await asyncio.create_subprocess_exec(
+            "uv",
+            "--version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        # output is like "uv 0.6.3 (abcdef 2025-01-01)"
-        parts = result.stdout.strip().split()
-        if len(parts) >= 2:
-            return parts[1]
-        return result.stdout.strip()
+        stdout, _ = await proc.communicate()
+        if proc.returncode == 0:
+            text = stdout.decode().strip()
+            parts = text.split()
+            return parts[1] if len(parts) >= 2 else text
     except Exception:
-        return "unknown"
+        pass
+    return "unknown"
 
 
 def _venv_exists() -> bool:
@@ -701,11 +701,11 @@ class StatusPanel(PanelWidget):
         pkg_count: int = 0,
         source_count: int = 0,
         outdated_count: int = 0,
-        venv_ok: bool = False,
+        uv_version: str = "unknown",
     ) -> None:
         """Rebuild the status display."""
         python_ver = _get_python_version()
-        uv_ver = _get_uv_version()
+        uv_ver = uv_version
         venv_ok = _venv_exists()
 
         lines: list[str] = []
@@ -1360,7 +1360,7 @@ class DependencyManagerApp(App):
         if toml_path.is_file():
             self._refresh_data()
         else:
-            self._update_status_panel()
+            await self._update_status_panel()
             self.push_screen(
                 ConfirmModal(
                     message="No pyproject.toml found.\nInitialise a new uv project?",
@@ -1614,11 +1614,11 @@ class DependencyManagerApp(App):
             source_filter=source_filter,
         )
 
-        self._update_status_panel()
+        await self._update_status_panel()
         self._update_details_for_selection()
         self._hide_loading()
 
-    def _update_status_panel(self) -> None:
+    async def _update_status_panel(self) -> None:
         """Refresh the status panel counts."""
         all_sources: set[str] = set()
         for pkg in self._packages:
@@ -1636,11 +1636,13 @@ class DependencyManagerApp(App):
                 != self._latest_versions.get(_normalise(pkg.name), "")
             )
 
+        uv_ver = await _get_uv_version()
         status = self.query_one("#status-panel", StatusPanel)
         status.update_info(
             pkg_count=len(self._packages),
             source_count=len(all_sources),
             outdated_count=outdated,
+            uv_version=uv_ver,
         )
 
     def _update_details_for_selection(self) -> None:
@@ -1703,7 +1705,7 @@ class DependencyManagerApp(App):
         pkg_panel = self.query_one("#packages-panel", PackagesPanel)
         pkg_panel.set_latest_versions(self._latest_versions)
 
-        self._update_status_panel()
+        await self._update_status_panel()
         self._update_details_for_selection()
         self._hide_loading()
 
@@ -1783,7 +1785,7 @@ class DependencyManagerApp(App):
             self.notify("Created virtual environment (.venv)", severity="information")
         else:
             self.notify(f"Failed to create venv: {output[:200]}", severity="error")
-        self._update_status_panel()
+        await self._update_status_panel()
 
     # -- Add ------------------------------------------------------------------
 

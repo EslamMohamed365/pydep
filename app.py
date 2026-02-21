@@ -1326,6 +1326,29 @@ class DependencyManagerApp(App):
         ]
         self._current_panel_idx: int = 2  # start on packages
 
+    # -- helpers ---------------------------------------------------------------
+
+    def _collect_sources(self) -> list[str]:
+        """Return sorted unique source file names from all packages."""
+        sources: set[str] = set()
+        for pkg in self._packages:
+            for src in pkg.sources:
+                sources.add(src.file)
+        return sorted(sources)
+
+    def _count_outdated(self) -> int:
+        """Return the number of packages with a known newer version on PyPI."""
+        if not self._latest_versions:
+            return 0
+        return sum(
+            1
+            for pkg in self._packages
+            if pkg.installed_version
+            and self._latest_versions.get(_normalise(pkg.name), "")
+            and pkg.installed_version
+            != self._latest_versions.get(_normalise(pkg.name), "")
+        )
+
     # -- layout ---------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
@@ -1596,15 +1619,9 @@ class DependencyManagerApp(App):
             self.notify(f"Failed to load dependencies: {exc}", severity="error")
             self._packages = []
 
-        # Collect sources
-        all_sources: set[str] = set()
-        for pkg in self._packages:
-            for s in pkg.sources:
-                all_sources.add(s.file)
-
         # Update all panels
         sources_panel = self.query_one("#sources-panel", SourcesPanel)
-        sources_panel.set_sources(sorted(all_sources))
+        sources_panel.set_sources(self._collect_sources())
 
         pkg_panel = self.query_one("#packages-panel", PackagesPanel)
         source_filter = sources_panel.get_selected_source()
@@ -1620,28 +1637,12 @@ class DependencyManagerApp(App):
 
     async def _update_status_panel(self) -> None:
         """Refresh the status panel counts."""
-        all_sources: set[str] = set()
-        for pkg in self._packages:
-            for s in pkg.sources:
-                all_sources.add(s.file)
-
-        outdated = 0
-        if self._latest_versions:
-            outdated = sum(
-                1
-                for pkg in self._packages
-                if pkg.installed_version
-                and self._latest_versions.get(_normalise(pkg.name), "")
-                and pkg.installed_version
-                != self._latest_versions.get(_normalise(pkg.name), "")
-            )
-
         uv_ver = await _get_uv_version()
         status = self.query_one("#status-panel", StatusPanel)
         status.update_info(
             pkg_count=len(self._packages),
-            source_count=len(all_sources),
-            outdated_count=outdated,
+            source_count=len(self._collect_sources()),
+            outdated_count=self._count_outdated(),
             uv_version=uv_ver,
         )
 
@@ -1710,14 +1711,7 @@ class DependencyManagerApp(App):
         self._hide_loading()
 
         # Toast summary
-        outdated = sum(
-            1
-            for pkg in self._packages
-            if pkg.installed_version
-            and self._latest_versions.get(_normalise(pkg.name), "")
-            and pkg.installed_version
-            != self._latest_versions.get(_normalise(pkg.name), "")
-        )
+        outdated = self._count_outdated()
         if failures:
             self.notify(
                 f"Checked {len(names)} packages. {failures} failed (network errors).",

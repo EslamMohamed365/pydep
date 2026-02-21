@@ -8,17 +8,24 @@ PyDep scans your project for dependencies across multiple sources — `pyproject
 
 ## Features
 
-- **Lazygit-style layout** — Multi-panel interface with Status, Sources, Packages, and Details panels. Navigate between panels with `Tab` or number keys (`1`/`2`/`3`)
+- **Lazygit-style layout** — Multi-panel interface with Status, Sources, Packages, and Details panels. Navigate between panels with `Tab`/`Shift+Tab` or number keys (`1`/`2`/`3`)
 - **Multi-source scanning** — Aggregates dependencies from 6 sources into a single view, merging duplicates by normalized name (PEP 503)
-- **Source filtering** — Select a source in the Sources panel to filter the Packages panel to only that source's dependencies
-- **Vim-style navigation** — `j`/`k` movement, `gg` jump to top, `G` jump to bottom, `/` filter mode
+- **PEP 735 dependency groups** — Full support for `[dependency-groups]` in `pyproject.toml`, with a group selector in the Add modal
+- **Source filtering** — Select a source in the Sources panel to filter the Packages panel to only that source's dependencies. Filter-active indicator shown in the Packages panel title
+- **Vim-style navigation** — `j`/`k` movement, `gg` jump to top, `G` jump to bottom, `/` filter mode. Scroll-to-visible follows selection in all panels
 - **Keyboard-first** — No mouse required. Every action has a keybinding
+- **PyPI search** — Press `p` to search PyPI interactively with `j`/`k` navigation and install directly from results
 - **PyPI validation** — Async package/version verification before any install or update. Leave version blank to auto-resolve the latest
+- **Version constraint picker** — Choose version constraint operators (`==`, `>=`, `~=`) in Add and Update modals
 - **Outdated check** — Batch-query PyPI for the latest version of every package. Color-coded: green = up to date, yellow = outdated
+- **Update all outdated** — Press `U` to update all outdated packages at once with confirmation
+- **Package details** — Details panel shows package summary, dependencies, and source info. Press `D` to open full docs in your browser
+- **Sync & Lock** — Press `s` to run `uv sync`, `L` to run `uv lock`
 - **Source-aware deletion** — Remove a package from a specific source file. Multi-source packages prompt you to choose which source
+- **Improved source tags** — Compact source file indicators: pyproj, reqs, setup, etc.
 - **Virtual environment creation** — Press `v` to create a `.venv` via `uv venv`
 - **Loading indicators** — Visual feedback during all async operations (refresh, add, update, delete, outdated check, venv creation)
-- **uv integration** — Uses `uv add`, `uv remove`, `uv venv`, and `uv pip` under the hood
+- **uv integration** — Uses `uv add`, `uv remove`, `uv sync`, `uv lock`, `uv venv`, and `uv pip` under the hood
 - **Tokyo Night theme** — Consistent dark color palette across all UI elements
 - **Contextual hints** — Bottom hint bar updates based on which panel is focused
 
@@ -63,7 +70,7 @@ If no `pyproject.toml` exists in the current directory, PyDep will offer to init
 │   rich     13.9.4  ││                                        │
 │   textual  1.0.0   ││                                        │
 └────────────────────┘└────────────────────────────────────────┘
- Tab:switch  j/k:nav  /:filter  a:add  d:del  u:upd  ?:help
+ Tab:switch  j/k:nav  /:filter  a:add  d:del  u:upd  s:sync  p:search  ?:help
 ```
 
 ## Keybindings
@@ -84,7 +91,7 @@ If no `pyproject.toml` exists in the current directory, PyDep will offer to init
 | `j` / `k` | Move selection down / up |
 | `G` | Jump to last item |
 | `g g` | Jump to first item |
-| `Enter` | Select source (Sources panel) |
+| `Enter` | Select source (Sources) / Update package (Packages) |
 
 ### Global Actions
 
@@ -92,9 +99,14 @@ If no `pyproject.toml` exists in the current directory, PyDep will offer to init
 |-----|--------|
 | `/` | Open filter bar (filters packages by name) |
 | `a` | Add a package |
+| `p` | Search PyPI |
 | `u` | Update selected package |
 | `d` | Delete selected package |
 | `o` | Check outdated packages |
+| `U` | Update all outdated packages |
+| `s` | Sync (`uv sync`) |
+| `L` | Lock (`uv lock`) |
+| `D` | Open package docs in browser |
 | `r` | Refresh package list |
 | `v` | Create virtual environment (`uv venv`) |
 | `i` | Initialize project (`uv init --bare`) |
@@ -122,7 +134,7 @@ If no `pyproject.toml` exists in the current directory, PyDep will offer to init
 
 | Source | Parsed | Removal |
 |--------|--------|---------|
-| `pyproject.toml` | `[project].dependencies` + optional groups | `uv remove` |
+| `pyproject.toml` | `[project].dependencies`, optional groups, and `[dependency-groups]` (PEP 735) | `uv remove` |
 | `requirements*.txt` | Line-by-line (skips comments/flags) | Line removal |
 | `setup.py` | AST-based `install_requires` extraction | Manual only (toast warning) |
 | `setup.cfg` | `[options].install_requires` via configparser | configparser edit |
@@ -135,7 +147,7 @@ If no `pyproject.toml` exists in the current directory, PyDep will offer to init
 pydep/
   app.py          # Application code: data model, parsers, panel widgets, modals, TUI
   app.tcss        # Tokyo Night themed Textual CSS for multi-panel layout
-  test_app.py     # 67 headless tests (Textual pilot)
+  test_app.py     # 109 headless tests (Textual pilot)
   pyproject.toml  # Project metadata and dependencies
   demo.tape       # VHS script for generating the demo GIF
 ```
@@ -146,25 +158,31 @@ pydep/
 uv run pytest test_app.py -v
 ```
 
-67 tests covering:
+109 tests covering:
 
 - All 6 dependency parsers (including missing-file edge cases)
+- PEP 735 `[dependency-groups]` parsing
 - Multi-source merge logic
 - PyPI validation (4 scenarios)
 - Panel existence and layout
 - Status panel info display and venv status
 - Sources panel population and source selection filtering
-- Details panel updates on package selection
+- Details panel updates on package selection (summary, dependencies)
 - Vim motions (`j`/`k`/`G`/`gg`) in Packages and Sources panels
-- Tab cycling and number-key panel jumping
-- Filter mode (open, close, escape, filtering)
+- Tab cycling, Shift+Tab, and number-key panel jumping
+- Filter mode (open, close, escape, filtering) with filter indicator
 - Contextual hint bar updates
-- All modal interactions
+- All modal interactions (Add, Update, Delete with version constraint picker)
 - Per-source removal functions
 - Source-aware deletion flow (single-source vs multi-source)
 - Outdated check (batch query, UI integration, status panel count)
+- Update all outdated with confirmation
+- PyPI search modal
+- Sync and Lock commands
+- Package docs viewer
 - Venv creation warning
 - Loading overlay
+- Scroll-to-visible behavior
 
 ## Contributing
 

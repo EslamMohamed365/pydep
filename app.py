@@ -1397,6 +1397,7 @@ _HELP_TEXT = """\
   [#9ece6a]j[/] / [#9ece6a]k[/]           Move down / up
   [#9ece6a]g g[/]             Jump to first item
   [#9ece6a]G[/]               Jump to last item
+  [#9ece6a]Enter[/]           Select source / Update package
 
 [b #7aa2f7]PACKAGES[/]  (any panel)
   [#9ece6a]a[/]               Add package

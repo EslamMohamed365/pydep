@@ -90,6 +90,29 @@ Sleep 1s
 Type "o"
 Sleep 5s
 
+# Sync project
+Type "s"
+Sleep 3s
+
+# Search PyPI for a package
+Type "p"
+Sleep 1s
+Type "flask"
+Sleep 2s
+Type "j"
+Sleep 400ms
+Type "j"
+Sleep 400ms
+Escape
+Sleep 1s
+
+# Update all outdated packages
+Type "U"
+Sleep 1s
+# Dismiss confirmation (press n to skip in demo)
+Type "n"
+Sleep 1s
+
 # Open help
 Type "?"
 Sleep 2s

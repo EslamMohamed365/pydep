@@ -1392,6 +1392,7 @@ _HELP_TEXT = """\
 
 [b #7aa2f7]PACKAGES[/]  (any panel)
   [#9ece6a]a[/]               Add package
+  [#9ece6a]p[/]               Search PyPI
   [#9ece6a]u[/]               Update selected package
   [#9ece6a]d[/]               Delete selected package
   [#9ece6a]/[/]               Filter packages
@@ -1511,6 +1512,151 @@ class SourceSelectModal(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+# ---------------------------------------------------------------------------
+
+
+class SearchPyPIModal(ModalScreen[str | None]):
+    """Search PyPI for packages and select one to add."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._results: list[tuple[str, str, str]] = []
+        self._selected: int = 0
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="search-pypi-container"):
+            yield Static("Search PyPI", id="search-pypi-title")
+            yield Input(
+                placeholder="Search packages...",
+                id="search-query",
+            )
+            yield Static("", id="search-status")
+            yield Static("", id="search-results")
+            yield Static(
+                "[#565f89]Enter search  ·  j/k navigate  ·  Enter select  ·  Esc cancel[/]",
+                id="search-pypi-hint",
+            )
+
+    def on_mount(self) -> None:
+        self.query_one("#search-query", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Trigger search when user presses Enter in the input."""
+        if event.input.id == "search-query":
+            query = event.input.value.strip()
+            if query:
+                self._do_search(query)
+
+    @work(exclusive=True, group="pypi-search")
+    async def _do_search(self, query: str) -> None:
+        """Run PyPI search in background."""
+        status = self.query_one("#search-status", Static)
+        status.update("[#7aa2f7]Searching...[/]")
+        self._results = []
+        self._selected = 0
+        self._render_results()
+
+        results = await self._search_pypi(query)
+        self._results = results
+        self._selected = 0
+
+        if results:
+            status.update(
+                f"[#9ece6a]{len(results)} result{'s' if len(results) != 1 else ''}[/]"
+            )
+        else:
+            status.update("[#f7768e]No results found[/]")
+        self._render_results()
+
+    async def _search_pypi(self, query: str) -> list[tuple[str, str, str]]:
+        """Search PyPI. Returns ``[(name, version, description), ...]``."""
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"https://pypi.org/search/?q={query}",
+                    follow_redirects=True,
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    return self._parse_search_html(resp.text)
+        except Exception:
+            pass
+        return []
+
+    @staticmethod
+    def _parse_search_html(html: str) -> list[tuple[str, str, str]]:
+        """Extract package info from PyPI search results HTML."""
+        names = re.findall(r'class="package-snippet__name"[^>]*>([^<]+)<', html)
+        versions = re.findall(r'class="package-snippet__version"[^>]*>([^<]+)<', html)
+        descriptions = re.findall(
+            r'class="package-snippet__description"[^>]*>([^<]+)<', html
+        )
+        results: list[tuple[str, str, str]] = []
+        for i in range(min(len(names), len(versions), len(descriptions))):
+            results.append(
+                (
+                    names[i].strip(),
+                    versions[i].strip(),
+                    descriptions[i].strip(),
+                )
+            )
+        return results
+
+    def _render_results(self) -> None:
+        """Render the results list with highlighted selection."""
+        if not self._results:
+            self.query_one("#search-results", Static).update("")
+            return
+        lines: list[str] = []
+        for i, (name, version, desc) in enumerate(self._results):
+            marker = "\u25b8" if i == self._selected else " "
+            short_desc = desc[:60] + "..." if len(desc) > 60 else desc
+            if i == self._selected:
+                lines.append(
+                    f"  [#c0caf5]{marker} {name}[/]"
+                    f"  [#9ece6a]{version}[/]"
+                    f"  [#565f89]{short_desc}[/]"
+                )
+            else:
+                lines.append(f"  [#565f89]{marker} {name}  {version}  {short_desc}[/]")
+        self.query_one("#search-results", Static).update("\n".join(lines))
+
+    def on_key(self, event: events.Key) -> None:
+        """Handle ``j``/``k`` navigation and Enter selection in results."""
+        if not self._results:
+            return
+        key = event.key
+        if key == "j" or key == "down":
+            event.prevent_default()
+            event.stop()
+            self._selected = min(self._selected + 1, len(self._results) - 1)
+            self._render_results()
+            return
+        if key == "k" or key == "up":
+            event.prevent_default()
+            event.stop()
+            self._selected = max(self._selected - 1, 0)
+            self._render_results()
+            return
+        if key == "enter":
+            # Only select from results if the input is NOT focused
+            focused = self.app.focused
+            search_input = self.query_one("#search-query", Input)
+            if focused is not search_input:
+                event.prevent_default()
+                event.stop()
+                name = self._results[self._selected][0]
+                self.dismiss(name)
+                return
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 # =============================================================================
 # Main Application
 # =============================================================================
@@ -1538,6 +1684,7 @@ class DependencyManagerApp(App):
         Binding("v", "create_venv", "Venv", priority=True),
         Binding("s", "sync", "Sync", priority=True),
         Binding("L", "lock", "Lock", priority=True),
+        Binding("p", "search_pypi", "Search PyPI", priority=True),
         Binding("question_mark", "show_help", "?Help", priority=True),
         Binding("q", "quit", "Quit", priority=True),
     ]
@@ -2119,6 +2266,21 @@ class DependencyManagerApp(App):
             self.notify("Lock file updated", severity="information")
         else:
             self.notify(f"Lock failed: {msg}", severity="error")
+
+    # -- Add ------------------------------------------------------------------
+
+    # -- Search PyPI -----------------------------------------------------------
+
+    def action_search_pypi(self) -> None:
+        """Open the PyPI search modal."""
+        self.push_screen(SearchPyPIModal(), callback=self._on_search_result)
+
+    def _on_search_result(self, result: str | None) -> None:
+        """Handle selected package from PyPI search."""
+        if result:
+            self.push_screen(
+                AddPackageModal(package_name=result), callback=self._on_add_result
+            )
 
     # -- Add ------------------------------------------------------------------
 

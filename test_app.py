@@ -50,6 +50,7 @@ def test_imports():
         PackagesPanel,
         PanelWidget,
         SourceSelectModal,
+        SearchPyPIModal,
         SourcesPanel,
         StatusPanel,
         UpdatePackageModal,
@@ -66,6 +67,7 @@ def test_imports():
     assert PackageManager is not None
     assert DepSource is not None
     assert SourceSelectModal is not None
+    assert SearchPyPIModal is not None
     assert _fetch_latest_versions is not None
     assert PanelWidget is not None
     assert StatusPanel is not None
@@ -1860,3 +1862,56 @@ async def test_details_shows_dependencies(
         assert "certifi" in rendered
         assert "idna" in rendered
         assert "urllib3" in rendered
+
+
+# ---------------------------------------------------------------------------
+# 18. PyPI Search Modal
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_pypi_modal_opens(app_with_deps):
+    """Pressing p should open the PyPI search modal."""
+    from app import SearchPyPIModal
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app_with_deps.screen, SearchPyPIModal)
+
+
+@pytest.mark.asyncio
+async def test_search_pypi_modal_escape_closes(app_with_deps):
+    """Pressing Escape in the PyPI search modal should close it."""
+    from app import SearchPyPIModal
+
+    async with app_with_deps.run_test(size=(140, 30)) as pilot:
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app_with_deps.screen, SearchPyPIModal)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app_with_deps.screen, SearchPyPIModal)
+
+
+@pytest.mark.asyncio
+async def test_search_pypi_parse_html():
+    """``_parse_search_html`` should extract package info from HTML."""
+    from app import SearchPyPIModal
+
+    html = """
+    <a class="package-snippet">
+        <span class="package-snippet__name">requests</span>
+        <span class="package-snippet__version">2.31.0</span>
+        <p class="package-snippet__description">HTTP for Humans</p>
+    </a>
+    <a class="package-snippet">
+        <span class="package-snippet__name">httpx</span>
+        <span class="package-snippet__version">0.24.1</span>
+        <p class="package-snippet__description">A next-gen HTTP client</p>
+    </a>
+    """
+    results = SearchPyPIModal._parse_search_html(html)
+    assert len(results) == 2
+    assert results[0] == ("requests", "2.31.0", "HTTP for Humans")
+    assert results[1] == ("httpx", "0.24.1", "A next-gen HTTP client")

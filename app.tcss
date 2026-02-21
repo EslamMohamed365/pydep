@@ -367,3 +367,62 @@ Toast {
     text-align: center;
     height: 1;
 }
+
+/* --- Search PyPI Modal --- */
+
+#search-pypi-container {
+    width: 70;
+    height: auto;
+    max-height: 30;
+    background: #24283b;
+    border: thick #7dcfff 60%;
+    padding: 1 2;
+}
+
+#search-pypi-title {
+    text-style: bold;
+    color: #7dcfff;
+    text-align: center;
+    margin: 0 0 1 0;
+    width: 100%;
+}
+
+#search-pypi-container Input {
+    width: 100%;
+    margin: 0 0 1 0;
+    background: #1a1b26;
+    color: #c0caf5;
+    border: tall #3b4261;
+}
+
+#search-pypi-container Input:focus {
+    border: tall #7dcfff;
+}
+
+#search-pypi-container Input > .input--placeholder {
+    color: #565f89;
+}
+
+#search-status {
+    width: 100%;
+    color: #565f89;
+    text-align: center;
+    height: 1;
+    margin: 0 0 1 0;
+}
+
+#search-results {
+    width: 100%;
+    color: #c0caf5;
+    margin: 0 0 1 0;
+    padding: 0 1;
+    height: auto;
+    max-height: 18;
+}
+
+#search-pypi-hint {
+    width: 100%;
+    color: #565f89;
+    text-align: center;
+    height: 1;
+}

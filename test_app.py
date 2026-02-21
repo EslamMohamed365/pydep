@@ -1695,3 +1695,58 @@ def test_parse_pyproject_dependency_groups(tmp_path):
     # Check dev group source label
     dev_deps = [d for d in deps if "dev" in d[2]]
     assert len(dev_deps) >= 2
+
+
+# ---------------------------------------------------------------------------
+# 21. Sync and Lock actions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_action(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Pressing ``s`` runs ``uv sync`` via the package manager."""
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_UVLOCK)
+    monkeypatch.chdir(tmp_path)
+
+    from app import DependencyManagerApp
+
+    app = DependencyManagerApp()
+
+    mock_sync = AsyncMock(return_value=(True, ""))
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        monkeypatch.setattr(app.pkg_mgr, "sync", mock_sync)
+        await pilot.press("s")
+        await pilot.pause()
+        import asyncio
+
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+        mock_sync.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_lock_action(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Pressing ``L`` runs ``uv lock`` via the package manager."""
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_UVLOCK)
+    monkeypatch.chdir(tmp_path)
+
+    from app import DependencyManagerApp
+
+    app = DependencyManagerApp()
+
+    mock_lock = AsyncMock(return_value=(True, ""))
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        monkeypatch.setattr(app.pkg_mgr, "lock", mock_lock)
+        await pilot.press("L")
+        await pilot.pause()
+        import asyncio
+
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+        mock_lock.assert_called_once()

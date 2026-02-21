@@ -166,6 +166,14 @@ class PackageManager:
         """Create a virtual environment via ``uv venv``."""
         return await self._run("venv")
 
+    async def sync(self) -> tuple[bool, str]:
+        """Run ``uv sync``."""
+        return await self._run("sync")
+
+    async def lock(self) -> tuple[bool, str]:
+        """Run ``uv lock``."""
+        return await self._run("lock")
+
 
 # =============================================================================
 # Dependency Parsing  (multi-source scanner)
@@ -1355,6 +1363,8 @@ _HELP_TEXT = """\
   [#9ece6a]d[/]               Delete selected package
   [#9ece6a]/[/]               Filter packages
   [#9ece6a]o[/]               Check outdated packages
+  [#9ece6a]s[/]               Sync  (uv sync)
+  [#9ece6a]L[/]               Lock  (uv lock)
 
 [b #7aa2f7]GLOBAL[/]
   [#9ece6a]v[/]               Create virtual environment
@@ -1491,6 +1501,8 @@ class DependencyManagerApp(App):
         Binding("slash", "focus_search", "/Filter", priority=True),
         Binding("i", "init_project", "Init", priority=True),
         Binding("v", "create_venv", "Venv", priority=True),
+        Binding("s", "sync", "Sync", priority=True),
+        Binding("L", "lock", "Lock", priority=True),
         Binding("question_mark", "show_help", "?Help", priority=True),
         Binding("q", "quit", "Quit", priority=True),
     ]
@@ -1974,6 +1986,33 @@ class DependencyManagerApp(App):
         else:
             self.notify(f"Failed to create venv: {output[:200]}", severity="error")
         await self._update_status_panel()
+
+    # -- Sync -----------------------------------------------------------------
+
+    @work(exclusive=True, group="sync")
+    async def action_sync(self) -> None:
+        """Run ``uv sync`` to install/update all dependencies."""
+        self._show_loading("Running uv sync...")
+        ok, msg = await self.pkg_mgr.sync()
+        self._hide_loading()
+        if ok:
+            self.notify("Sync complete", severity="information")
+            self._refresh_data()
+        else:
+            self.notify(f"Sync failed: {msg}", severity="error")
+
+    # -- Lock -----------------------------------------------------------------
+
+    @work(exclusive=True, group="lock")
+    async def action_lock(self) -> None:
+        """Run ``uv lock`` to update the lock file."""
+        self._show_loading("Running uv lock...")
+        ok, msg = await self.pkg_mgr.lock()
+        self._hide_loading()
+        if ok:
+            self.notify("Lock file updated", severity="information")
+        else:
+            self.notify(f"Lock failed: {msg}", severity="error")
 
     # -- Add ------------------------------------------------------------------
 

@@ -35,11 +35,10 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import ast
 import configparser
-import glob as glob_mod
 
 import httpx
 from rich.text import Text
@@ -558,7 +557,7 @@ async def validate_pypi(
         return False, "Failed to parse PyPI response.", None
 
     latest: str = data.get("info", {}).get("version", "")
-    releases: dict = data.get("releases", {})
+    releases: dict[str, Any] = data.get("releases", {})
 
     if version:
         if version in releases:
@@ -688,7 +687,7 @@ class PanelWidget(Static):
 class StatusPanel(PanelWidget):
     """Non-navigable panel showing project status info."""
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(title="Status", id="status-panel", **kwargs)
         self._info_text = ""
 
@@ -736,7 +735,7 @@ class SourcesPanel(PanelWidget):
 
     selected_index: reactive[int] = reactive(0)
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(title="Sources", id="sources-panel", **kwargs)
         self._sources: list[str] = []
 
@@ -794,7 +793,7 @@ class PackagesPanel(PanelWidget):
 
     selected_index: reactive[int] = reactive(0)
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(title="Packages", id="packages-panel", **kwargs)
         self._all_packages: list[Package] = []
         self._filtered_packages: list[Package] = []
@@ -943,7 +942,7 @@ class PackagesPanel(PanelWidget):
 class DetailsPanel(PanelWidget):
     """Right panel showing details of the selected package."""
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(title="Details", id="details-panel", **kwargs)
         self.can_focus = False  # not navigable
 

@@ -1788,7 +1788,8 @@ class DependencyManagerApp(App):
     # -- Add ------------------------------------------------------------------
 
     def action_add_package(self) -> None:
-        self._ensure_toml_or_warn()
+        if not self._ensure_toml_or_warn():
+            return
         self.push_screen(AddPackageModal(), callback=self._on_add_result)
 
     def _on_add_result(self, result: tuple[str, str] | None) -> None:
@@ -1813,6 +1814,8 @@ class DependencyManagerApp(App):
     # -- Update ---------------------------------------------------------------
 
     def action_update_package(self) -> None:
+        if not self._ensure_toml_or_warn():
+            return
         pkg = self._selected_package()
         if pkg is None:
             self.notify("Select a package first.", severity="warning")
@@ -1848,6 +1851,8 @@ class DependencyManagerApp(App):
     # -- Delete ---------------------------------------------------------------
 
     def action_delete_package(self) -> None:
+        if not self._ensure_toml_or_warn():
+            return
         pkg = self._selected_package()
         if pkg is None:
             self.notify("Select a package first.", severity="warning")
@@ -1936,11 +1941,14 @@ class DependencyManagerApp(App):
         pkg_panel = self.query_one("#packages-panel", PackagesPanel)
         return pkg_panel.get_selected_package()
 
-    def _ensure_toml_or_warn(self) -> None:
+    def _ensure_toml_or_warn(self) -> bool:
+        """Return True if pyproject.toml exists, else notify and return False."""
         if not (Path.cwd() / "pyproject.toml").is_file():
             self.notify(
-                "No pyproject.toml. Press [i] to initialise.", severity="warning"
+                "No pyproject.toml found. Press 'i' to init.", severity="warning"
             )
+            return False
+        return True
 
 
 # =============================================================================

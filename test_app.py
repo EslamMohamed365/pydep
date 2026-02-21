@@ -973,6 +973,23 @@ async def test_init_modal_opens_no_toml(app_no_deps):
         assert "Initialise" in rendered or "Init" in rendered
 
 
+@pytest.mark.asyncio
+async def test_ensure_toml_blocks_add(app_no_deps):
+    """Add action should be blocked when no pyproject.toml exists."""
+    from app import AddPackageModal
+
+    async with app_no_deps.run_test() as pilot:
+        await pilot.pause()
+        # Dismiss the init confirmation modal first
+        await pilot.press("n")
+        await pilot.pause()
+        # Now try to add a package — should be blocked
+        await pilot.press("a")
+        await pilot.pause()
+        # AddPackageModal should NOT be on the screen stack
+        assert not isinstance(app_no_deps.screen, AddPackageModal)
+
+
 # ---------------------------------------------------------------------------
 # 12. Per-source removal functions
 # ---------------------------------------------------------------------------

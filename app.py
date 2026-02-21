@@ -234,6 +234,16 @@ def _parse_pyproject(path: Path) -> list[tuple[str, str, str]]:
             if parsed:
                 results.append((parsed[0], parsed[1], group_label))
 
+    # PEP 735 dependency-groups
+    dep_groups = data.get("dependency-groups", {})
+    for group_name, group_deps in dep_groups.items():
+        group_label = f"{label} [{group_name}]"
+        for raw in group_deps:
+            if isinstance(raw, str):
+                parsed = _parse_dep_string(raw)
+                if parsed:
+                    results.append((parsed[0], parsed[1], group_label))
+
     return results
 
 

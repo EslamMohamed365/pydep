@@ -1580,3 +1580,35 @@ async def test_enter_on_package_opens_update(app_with_deps):
         from app import UpdatePackageModal
 
         assert isinstance(app_with_deps.screen, UpdatePackageModal)
+
+
+# ---------------------------------------------------------------------------
+# 20. PEP 735 [dependency-groups] parsing
+# ---------------------------------------------------------------------------
+
+
+def test_parse_pyproject_dependency_groups(tmp_path):
+    """PEP 735 [dependency-groups] should be parsed."""
+    toml = tmp_path / "pyproject.toml"
+    toml.write_text(
+        textwrap.dedent("""\
+        [project]
+        name = "example"
+        dependencies = ["requests>=2.31"]
+
+        [dependency-groups]
+        dev = ["pytest>=7.0", "ruff"]
+        docs = ["sphinx>=7.0"]
+    """)
+    )
+    from app import _parse_pyproject
+
+    deps = _parse_pyproject(toml)
+    names = [d[0] for d in deps]
+    assert "requests" in names
+    assert "pytest" in names
+    assert "ruff" in names
+    assert "sphinx" in names
+    # Check dev group source label
+    dev_deps = [d for d in deps if "dev" in d[2]]
+    assert len(dev_deps) >= 2

@@ -1813,3 +1813,50 @@ async def test_update_all_outdated_none_outdated(
 
         # No modal should appear — still on the main screen
         assert not isinstance(app.screen, ConfirmModal)
+
+
+# ---------------------------------------------------------------------------
+# 18. Dependency tree in Details panel
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_details_shows_dependencies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Details panel should show dependency list from ``_get_package_requires``."""
+    from app import DetailsPanel, DependencyManagerApp, PackagesPanel
+
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT)
+    (tmp_path / "uv.lock").write_text(_UVLOCK)
+    monkeypatch.chdir(tmp_path)
+
+    async def mock_requires(name: str) -> list[str]:
+        return ["certifi", "idna", "urllib3"]
+
+    monkeypatch.setattr("app._get_package_requires", mock_requires)
+
+    app = DependencyManagerApp()
+
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+
+        # Focus packages panel and select first package
+        pkg_panel = app.query_one("#packages-panel", PackagesPanel)
+        pkg_panel.focus()
+        await pilot.pause()
+
+        # Navigate to trigger details update
+        await pilot.press("j")
+        await pilot.pause()
+        await pilot.press("k")
+        await pilot.pause()
+
+        details = app.query_one("#details-panel", DetailsPanel)
+        rendered = str(details.render())
+
+        # Should show the dependencies section
+        assert "Dependencies" in rendered
+        assert "certifi" in rendered
+        assert "idna" in rendered
+        assert "urllib3" in rendered

@@ -679,6 +679,29 @@ async def _get_uv_version() -> str:
     return "unknown"
 
 
+async def _get_package_requires(name: str) -> list[str]:
+    """Get direct dependencies of a package via ``uv pip show``."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "uv",
+            "pip",
+            "show",
+            name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode == 0:
+            for line in stdout.decode().splitlines():
+                if line.startswith("Requires:"):
+                    reqs = line.split(":", 1)[1].strip()
+                    if reqs:
+                        return [r.strip() for r in reqs.split(",")]
+    except Exception:
+        pass
+    return []
+
+
 def _venv_exists() -> bool:
     """Check if a .venv directory exists in CWD."""
     return Path(".venv").is_dir()
@@ -1016,7 +1039,10 @@ class DetailsPanel(PanelWidget):
         self.update("[#565f89]Select a package to view details[/]")
 
     def show_package(
-        self, pkg: Package | None, latest_versions: dict[str, str] | None = None
+        self,
+        pkg: Package | None,
+        latest_versions: dict[str, str] | None = None,
+        requires: list[str] | None = None,
     ) -> None:
         if pkg is None:
             self.update("[#565f89]Select a package to view details[/]")
@@ -1057,6 +1083,13 @@ class DetailsPanel(PanelWidget):
         for src in pkg.sources:
             color = _source_color(src.file)
             lines.append(f"    [{color}]{src.file}[/]  [#bb9af7]{src.specifier}[/]")
+
+        # Dependencies
+        if requires:
+            lines.append("")
+            lines.append("  [#7aa2f7]Dependencies:[/]")
+            for req in sorted(requires):
+                lines.append(f"    [#565f89]{req}[/]")
 
         self.update("\n".join(lines))
 
@@ -1860,6 +1893,19 @@ class DependencyManagerApp(App):
         details = self.query_one("#details-panel", DetailsPanel)
         pkg = pkg_panel.get_selected_package()
         details.show_package(pkg, self._latest_versions)
+        if pkg is not None:
+            self._fetch_and_show_requires(pkg)
+
+    @work(exclusive=True, group="requires")
+    async def _fetch_and_show_requires(self, pkg: Package) -> None:
+        """Fetch dependency list and re-render the details panel."""
+        requires = await _get_package_requires(pkg.name)
+        # Re-check the selection hasn't changed while we were fetching
+        pkg_panel = self.query_one("#packages-panel", PackagesPanel)
+        current = pkg_panel.get_selected_package()
+        if current is not None and _normalise(current.name) == _normalise(pkg.name):
+            details = self.query_one("#details-panel", DetailsPanel)
+            details.show_package(pkg, self._latest_versions, requires=requires)
 
     def _on_source_selection_changed(self) -> None:
         """When the selected source changes, filter the packages panel."""

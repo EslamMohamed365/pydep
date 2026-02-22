@@ -63,6 +63,10 @@ except ModuleNotFoundError:
     except ModuleNotFoundError:
         tomllib = None  # type: ignore[assignment]
 
+# Ecosystem support
+from base import Ecosystem, Package as BasePackage, EnvInfo
+from ecosystems import detect_all
+
 
 # =============================================================================
 # Data Structures
@@ -811,17 +815,27 @@ class StatusPanel(PanelWidget):
         pkg_count: int = 0,
         source_count: int = 0,
         outdated_count: int = 0,
-        uv_version: str = "unknown",
+        env_info: EnvInfo | None = None,
     ) -> None:
         """Rebuild the status display."""
-        python_ver = _get_python_version()
-        uv_ver = uv_version
-        venv_ok = _venv_exists()
-
         app_version = _get_app_version()
         divider = "[#3b4261]──────────────────────[/]"
-        venv_icon = "[#9ece6a]✓[/]" if venv_ok else "[#f7768e]✗[/]"
-        venv_label = "[#9ece6a].venv[/]" if venv_ok else "[#f7768e]No venv[/]"
+
+        if env_info:
+            lang_ver = env_info.language_version
+            tool_ver = env_info.tool_version
+            venv_exists = env_info.env_exists
+            venv_label = env_info.env_label
+        else:
+            lang_ver = _get_python_version()
+            tool_ver = "unknown"
+            venv_exists = _venv_exists()
+            venv_label = ".venv"
+
+        venv_icon = "[#9ece6a]✓[/]" if venv_exists else "[#f7768e]✗[/]"
+        venv_display = (
+            f"[#9ece6a]{venv_label}[/]" if venv_exists else "[#f7768e]No venv[/]"
+        )
 
         pkg_line = f"[#565f89]Packages:[/] [#7aa2f7]{pkg_count}[/]"
         if outdated_count:
@@ -830,8 +844,8 @@ class StatusPanel(PanelWidget):
         lines: list[str] = [
             f"[bold #7aa2f7]PyDep[/] [#565f89]v{app_version}[/]",
             divider,
-            f"[#565f89]Python[/] [#c0caf5]{python_ver}[/]  │  [#565f89]uv[/] [#c0caf5]{uv_ver}[/]",
-            f"[#565f89]venv:[/]  {venv_icon} {venv_label}",
+            f"[#565f89]{env_info.language_name if env_info else 'Python'}[/] [#c0caf5]{lang_ver}[/]  │  [#565f89]{env_info.tool_name if env_info else 'uv'}[/] [#c0caf5]{tool_ver}[/]",
+            f"[#565f89]venv:[/]  {venv_icon} {venv_display}",
             divider,
             pkg_line,
             f"[#565f89]Sources:[/]  [#7aa2f7]{source_count}[/]",
@@ -1273,6 +1287,68 @@ class ConfirmModal(ModalScreen[bool]):
 
     def action_cancel(self) -> None:
         self.dismiss(False)
+
+
+class InitProjectModal(ModalScreen[tuple[str, Path] | None]):
+    """Modal to initialize a new project - selects ecosystem type."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("1", "select_python", "Python"),
+        Binding("2", "select_javascript", "JavaScript"),
+        Binding("3", "select_go", "Go"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="init-dialog"):
+            yield Static("Initialize Project", id="init-title")
+            yield Static(
+                "Select ecosystem to initialize:\n\n"
+                "[#7aa2f7]1[/] - Python (pyproject.toml)\n"
+                "[#7aa2f7]2[/] - JavaScript (package.json)\n"
+                "[#7aa2f7]3[/] - Go (go.mod)",
+                id="init-message",
+            )
+            with Horizontal(id="init-buttons"):
+                yield Button("Python", variant="primary", id="init-btn-python")
+                yield Button("JavaScript", variant="primary", id="init-btn-js")
+                yield Button("Go", variant="primary", id="init-btn-go")
+                yield Button("Cancel", variant="default", id="init-btn-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id
+        if button_id == "init-btn-python":
+            self._init_python()
+        elif button_id == "init-btn-js":
+            self._init_javascript()
+        elif button_id == "init-btn-go":
+            self._init_go()
+        else:
+            self.dismiss(None)
+
+    def action_select_python(self) -> None:
+        self._init_python()
+
+    def action_select_javascript(self) -> None:
+        self._init_javascript()
+
+    def action_select_go(self) -> None:
+        self._init_go()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def _init_python(self) -> None:
+        self.dismiss(("python", Path.cwd()))
+
+    def _init_javascript(self) -> None:
+        self.dismiss(("javascript", Path.cwd()))
+
+    def _init_go(self) -> None:
+        self.dismiss(("go", Path.cwd()))
 
 
 # ---------------------------------------------------------------------------
@@ -1773,11 +1849,13 @@ class DependencyManagerApp(App):
 
     def __init__(self) -> None:
         super().__init__()
-        self.pkg_mgr = PackageManager()
-        self._packages: list[Package] = []
-        self._filter: str = ""
+        self._ecosystems: list[Ecosystem] = []
+        self._active_ecosystem: Ecosystem | None = None
+        self._packages: list[BasePackage] = []
         self._latest_versions: dict[str, str] = {}
-        self._pypi_cache: dict[str, dict[str, Any]] = {}
+        self._pypi_cache: dict[str, dict] = {}
+        self._filter: str = ""
+        self._selected_source: str | None = None
         # gg sequence state
         self._pending_g: bool = False
         self._pending_g_time: float = 0.0
@@ -1842,18 +1920,16 @@ class DependencyManagerApp(App):
         self._current_panel_idx = 2
         self._update_hint_bar()
 
-        toml_path = Path.cwd() / "pyproject.toml"
-        if toml_path.is_file():
+        # Detect ecosystems
+        self._ecosystems = detect_all(Path.cwd())
+
+        if self._ecosystems:
+            self._active_ecosystem = self._ecosystems[0]
             self._refresh_data()
         else:
+            # No project detected - will show init modal
             await self._update_status_panel()
-            self.push_screen(
-                ConfirmModal(
-                    message="No pyproject.toml found.\nInitialise a new uv project?",
-                    title="Initialise Project",
-                ),
-                callback=self._on_init_confirm,
-            )
+            self._show_init_modal()
 
     # -- Vim motion key handler -----------------------------------------------
 
@@ -2000,6 +2076,14 @@ class DependencyManagerApp(App):
             self.action_update_package()
             return
 
+        # Ecosystem cycling
+        if key == "e":
+            self._cycle_ecosystem(forward=True)
+            return
+        if key == "E":
+            self._cycle_ecosystem(forward=False)
+            return
+
         # Any other key resets the g-pending state
         if self._pending_g and key != "g":
             self._pending_g = False
@@ -2102,18 +2186,54 @@ class DependencyManagerApp(App):
         """Hide the loading overlay."""
         self.query_one("#loading-overlay", Container).display = False
 
+    def _show_init_modal(self) -> None:
+        """Show modal to initialize a project."""
+        self.push_screen(InitProjectModal(), self._on_init_project_result)
+
+    def _on_init_project_result(self, result: tuple[str, Path] | None) -> None:
+        """Handle init project result - re-detect ecosystems and refresh."""
+        if result is not None:
+            ecosystem_name, project_path = result
+            self._ecosystems = detect_all(project_path)
+            if self._ecosystems:
+                self._active_ecosystem = self._ecosystems[0]
+                self._refresh_data()
+
+    def _cycle_ecosystem(self, forward: bool = True) -> None:
+        """Cycle to next/previous ecosystem."""
+        if (
+            not self._ecosystems
+            or not self._active_ecosystem
+            or len(self._ecosystems) <= 1
+        ):
+            self.notify("No other ecosystems to switch to")
+            return
+
+        current_idx = self._ecosystems.index(self._active_ecosystem)
+        if forward:
+            next_idx = (current_idx + 1) % len(self._ecosystems)
+        else:
+            next_idx = (current_idx - 1) % len(self._ecosystems)
+
+        self._active_ecosystem = self._ecosystems[next_idx]
+        self._refresh_data()
+        self.notify(f"Switched to {self._active_ecosystem.display_name}")
+
     @work(exclusive=True, group="refresh")
     async def _refresh_data(self) -> None:
+        """Refresh package data from the active ecosystem."""
+        if self._active_ecosystem is None:
+            return
+
         self._show_loading("Scanning dependency sources...")
         try:
-            # Fetch installed packages asynchronously
-            installed = await _parse_installed(self.pkg_mgr._uv)
-            self._packages = load_dependencies(installed=installed)
+            self._packages = await self._active_ecosystem.load_dependencies(Path.cwd())
         except Exception as exc:
             self.notify(f"Failed to load dependencies: {exc}", severity="error")
             self._packages = []
 
-        # Update all panels
+        # Update panels
+        await self._update_status_panel()
         sources_panel = self.query_one("#sources-panel", SourcesPanel)
         sources_panel.set_sources(self._collect_sources())
 
@@ -2125,19 +2245,22 @@ class DependencyManagerApp(App):
             source_filter=source_filter,
         )
 
-        await self._update_status_panel()
         self._update_details_for_selection()
         self._hide_loading()
 
     async def _update_status_panel(self) -> None:
         """Refresh the status panel counts."""
-        uv_ver = await _get_uv_version()
         status = self.query_one("#status-panel", StatusPanel)
+
+        env_info: EnvInfo | None = None
+        if self._active_ecosystem:
+            env_info = await self._active_ecosystem.get_env_info()
+
         status.update_info(
             pkg_count=len(self._packages),
             source_count=len(self._collect_sources()),
             outdated_count=self._count_outdated(),
-            uv_version=uv_ver,
+            env_info=env_info,
         )
 
     def _update_details_for_selection(self) -> None:
@@ -2150,22 +2273,23 @@ class DependencyManagerApp(App):
             self._fetch_and_show_requires(pkg)
 
     @work(exclusive=True, group="requires")
-    async def _fetch_and_show_requires(self, pkg: Package) -> None:
-        """Fetch dependency list and PyPI summary, then re-render details."""
-        requires = await _get_package_requires(pkg.name)
-        meta = await self._fetch_pypi_metadata(pkg.name)
+    async def _fetch_and_show_requires(self, pkg: BasePackage) -> None:
+        """Fetch dependency list and package metadata, then re-render details."""
+        if not self._active_ecosystem:
+            return
+        requires = await self._active_ecosystem.get_package_requires(pkg.name)
+        meta = await self._active_ecosystem.fetch_package_metadata(pkg.name)
         summary: str | None = None
         license_str: str | None = None
         homepage: str | None = None
         requires_python: str | None = None
         author: str | None = None
         if meta:
-            info = meta.get("info", {})
-            summary = info.get("summary")
-            license_str = info.get("license")
-            homepage = info.get("home_page")
-            requires_python = info.get("requires_python")
-            author = info.get("author")
+            summary = meta.get("summary")
+            license_str = meta.get("license")
+            homepage = meta.get("homepage")
+            requires_python = meta.get("requires_python")
+            author = meta.get("author")
         # Re-check the selection hasn't changed while we were fetching
         pkg_panel = self.query_one("#packages-panel", PackagesPanel)
         current = pkg_panel.get_selected_package()
@@ -2228,14 +2352,17 @@ class DependencyManagerApp(App):
 
     @work(exclusive=True, group="outdated")
     async def _check_all_outdated(self) -> None:
-        """Query PyPI for the latest version of every loaded package."""
+        """Query registry for the latest version of every loaded package."""
         if not self._packages:
             self.notify("No packages to check.", severity="warning")
+            return
+        if not self._active_ecosystem:
+            self.notify("No active ecosystem", severity="error")
             return
         names = [pkg.name for pkg in self._packages]
         self._show_loading(f"Checking {len(names)} packages for updates...")
         try:
-            latest_map = await _fetch_latest_versions(names)
+            latest_map = await self._active_ecosystem.fetch_latest_versions(names)
         except Exception as exc:
             self._hide_loading()
             self.notify(f"Outdated check failed: {exc}", severity="error")
@@ -2303,14 +2430,16 @@ class DependencyManagerApp(App):
             self._do_update_all(outdated)
 
     @work(exclusive=True, group="manage")
-    async def _do_update_all(self, outdated: list[Package]) -> None:
+    async def _do_update_all(self, outdated: list[BasePackage]) -> None:
         """Sequentially update all outdated packages to their latest versions."""
         total = len(outdated)
         failures: list[str] = []
         for i, pkg in enumerate(outdated, 1):
-            latest = self._latest_versions.get(_normalise(pkg.name), "")
             self._show_loading(f"Updating {i}/{total}: {pkg.name}...")
-            ok, output = await self.pkg_mgr.add(pkg.name, latest)
+            if self._active_ecosystem:
+                ok, _output = await self._active_ecosystem.add(pkg.name)
+            else:
+                ok = False
             if not ok:
                 failures.append(pkg.name)
         self._hide_loading()
@@ -2335,18 +2464,10 @@ class DependencyManagerApp(App):
         if not pkg:
             self.notify("Select a package first.", severity="warning")
             return
-        meta = await self._fetch_pypi_metadata(pkg.name)
-        if not meta:
-            self.notify("Could not fetch package info", severity="error")
+        if not self._active_ecosystem:
+            self.notify("No active ecosystem", severity="error")
             return
-        info = meta.get("info", {})
-        urls = info.get("project_urls") or {}
-        doc_url = (
-            urls.get("Documentation")
-            or urls.get("Homepage")
-            or info.get("project_url")
-            or f"https://pypi.org/project/{pkg.name}/"
-        )
+        doc_url = self._active_ecosystem.get_docs_url(pkg.name)
         webbrowser.open(doc_url)
         self.notify(f"Opened {doc_url}", severity="information")
 
@@ -2356,30 +2477,19 @@ class DependencyManagerApp(App):
     # -- Init project ---------------------------------------------------------
 
     def action_init_project(self) -> None:
-        toml_path = Path.cwd() / "pyproject.toml"
-        if toml_path.is_file():
-            self.notify("pyproject.toml already exists.", severity="warning")
-            return
-        self.push_screen(
-            ConfirmModal(
-                message="No pyproject.toml found.\nInitialise a new uv project?",
-                title="Initialise Project",
-            ),
-            callback=self._on_init_confirm,
-        )
-
-    def _on_init_confirm(self, confirmed: bool | None) -> None:
-        if confirmed:
-            self._do_init()
+        self._show_init_modal()
 
     @work(exclusive=True, group="manage")
     async def _do_init(self) -> None:
+        if not self._active_ecosystem:
+            self.notify("No active ecosystem", severity="error")
+            return
         self._show_loading("Initialising project...")
-        ok, output = await self.pkg_mgr.init_project()
+        ok, output = await self._active_ecosystem.init_project(Path.cwd())
         self._hide_loading()
         if ok:
             self.notify(
-                "Project initialised \u2014 pyproject.toml created.",
+                "Project initialised.",
                 severity="information",
             )
         else:
@@ -2396,11 +2506,14 @@ class DependencyManagerApp(App):
 
     @work(exclusive=True, group="manage")
     async def _do_create_venv(self) -> None:
+        if not self._active_ecosystem:
+            self.notify("No active ecosystem", severity="error")
+            return
         self._show_loading("Creating virtual environment...")
-        ok, output = await self.pkg_mgr.create_venv()
+        ok, output = await self._active_ecosystem.create_env()
         self._hide_loading()
         if ok:
-            self.notify("Created virtual environment (.venv)", severity="information")
+            self.notify("Created virtual environment", severity="information")
         else:
             self.notify(f"Failed to create venv: {output[:200]}", severity="error")
         await self._update_status_panel()
@@ -2409,9 +2522,12 @@ class DependencyManagerApp(App):
 
     @work(exclusive=True, group="sync")
     async def action_sync(self) -> None:
-        """Run ``uv sync`` to install/update all dependencies."""
-        self._show_loading("Running uv sync...")
-        ok, msg = await self.pkg_mgr.sync()
+        """Sync dependencies using the active ecosystem."""
+        if not self._active_ecosystem:
+            self.notify("No active ecosystem", severity="error")
+            return
+        self._show_loading("Running sync...")
+        ok, msg = await self._active_ecosystem.sync()
         self._hide_loading()
         if ok:
             self.notify("Sync complete", severity="information")
@@ -2423,9 +2539,12 @@ class DependencyManagerApp(App):
 
     @work(exclusive=True, group="lock")
     async def action_lock(self) -> None:
-        """Run ``uv lock`` to update the lock file."""
-        self._show_loading("Running uv lock...")
-        ok, msg = await self.pkg_mgr.lock()
+        """Lock dependencies using the active ecosystem."""
+        if not self._active_ecosystem:
+            self.notify("No active ecosystem", severity="error")
+            return
+        self._show_loading("Running lock...")
+        ok, msg = await self._active_ecosystem.lock()
         self._hide_loading()
         if ok:
             self.notify("Lock file updated", severity="information")
@@ -2473,19 +2592,20 @@ class DependencyManagerApp(App):
 
     @work(exclusive=True, group="manage")
     async def _do_add(self, result: tuple[str, str, str, str]) -> None:
+        if not self._active_ecosystem:
+            self.notify("No active ecosystem", severity="error")
+            return
         name, version, constraint, group = result
         label = f"{name}{constraint}{version}" if version else name
         self._show_loading(f"Adding {label}...")
 
-        ok, output = await self.pkg_mgr.add(
-            name, version or None, constraint=constraint, group=group or None
-        )
+        ok, output = await self._active_ecosystem.add(name, group=group or None)
         self._hide_loading()
 
         if ok:
             target = f" to group '{group}'" if group and group != "main" else ""
             self.notify(
-                f"Added {label} to pyproject.toml{target}",
+                f"Added {label}{target}",
                 severity="information",
             )
         else:
@@ -2516,17 +2636,18 @@ class DependencyManagerApp(App):
 
     @work(exclusive=True, group="manage")
     async def _do_update(self, result: tuple[str, str, str]) -> None:
+        if not self._active_ecosystem:
+            self.notify("No active ecosystem", severity="error")
+            return
         name, version, constraint = result
         label = f"{name}{constraint}{version}" if version else name
         self._show_loading(f"Updating {label}...")
 
-        ok, output = await self.pkg_mgr.add(
-            name, version or None, constraint=constraint
-        )
+        ok, output = await self._active_ecosystem.add(name)
         self._hide_loading()
 
         if ok:
-            self.notify(f"Updated {label} in pyproject.toml", severity="information")
+            self.notify(f"Updated {label}", severity="information")
         else:
             self.notify(f"Failed to update {name}: {output[:200]}", severity="error")
         self._refresh_data()
@@ -2571,40 +2692,13 @@ class DependencyManagerApp(App):
         )
 
     @work(exclusive=True, group="manage")
-    async def _do_remove(self, pkg: Package, source_file: str) -> None:
+    async def _do_remove(self, pkg: BasePackage, source_file: str) -> None:
+        if not self._active_ecosystem:
+            self.notify("No active ecosystem", severity="error")
+            return
         self._show_loading(f"Removing {pkg.name} from {source_file}...")
 
-        # setup.py -> manual only
-        if source_file == "setup.py":
-            self._hide_loading()
-            self.notify(
-                "Cannot auto-edit setup.py \u2014 please remove the "
-                f"dependency '{pkg.name}' manually.",
-                severity="warning",
-            )
-            return
-
-        ok, output = False, ""
-        cwd = Path.cwd()
-
-        if source_file == "pyproject.toml":
-            ok, output = await self.pkg_mgr.remove(pkg.name)
-        elif source_file.startswith("pyproject.toml ["):
-            # Extract group name from "pyproject.toml [groupname]"
-            group = source_file.split("[", 1)[1].rstrip("]").strip()
-            ok, output = await self.pkg_mgr.remove_from_group(pkg.name, group)
-        elif source_file.startswith("requirements"):
-            ok, output = _remove_from_requirements(cwd / source_file, pkg.name)
-        elif source_file == "setup.cfg":
-            ok, output = _remove_from_setup_cfg(cwd / "setup.cfg", pkg.name)
-        elif source_file.startswith("Pipfile"):
-            ok, output = _remove_from_pipfile(cwd / "Pipfile", pkg.name)
-        elif source_file == "venv":
-            ok, output = await self.pkg_mgr.pip_uninstall(pkg.name)
-        else:
-            self._hide_loading()
-            self.notify(f"Unknown source: {source_file}", severity="error")
-            return
+        ok, output = await self._active_ecosystem.remove(pkg.name, source_file)
 
         self._hide_loading()
         if ok:

@@ -3,9 +3,13 @@ from __future__ import annotations
 import ast
 import asyncio
 import configparser
+import json
 import re
 import shutil
 from pathlib import Path
+from typing import Any
+
+import requests
 
 from base import DepSource, Ecosystem, Package, RegistryPackageInfo, EnvInfo
 
@@ -210,6 +214,113 @@ def _parse_pipfile(path: Path) -> list[tuple[str, str, str]]:
     return results
 
 
+# === PyPI Registry Functions ===
+
+
+async def _get_pypi_json(name: str) -> dict[str, Any] | None:
+    """Fetch ``/pypi/<name>/json`` from PyPI. Returns parsed JSON or ``None``."""
+    url = f"https://pypi.org/pypi/{name}/json"
+    try:
+        resp = await asyncio.to_thread(requests.get, url, timeout=(3.05, 10))
+        if resp.status_code == 200:
+            return resp.json()
+        return None
+    except requests.RequestException:
+        return None
+
+
+async def _fetch_latest_versions(
+    packages: list[str],
+) -> dict[str, str | None]:
+    """Fetch latest PyPI versions for *packages* concurrently."""
+    sem = asyncio.Semaphore(10)
+
+    async def _fetch_one(name: str) -> tuple[str, str | None]:
+        async with sem:
+            data = await _get_pypi_json(name)
+            if data is None:
+                return name, None
+            return name, data.get("info", {}).get("version")
+
+    results = await asyncio.gather(*[_fetch_one(p) for p in packages])
+    return dict(results)
+
+
+async def _fetch_pypi_index() -> list[str]:
+    """Fetch and cache the PyPI package name list from the Simple API."""
+    import time as _time
+
+    cache_dir = Path.home() / ".cache" / "pydep"
+    cache_file = cache_dir / "pypi_index.json"
+
+    if cache_file.exists():
+        try:
+            data = json.loads(cache_file.read_text())
+            if _time.time() - data.get("ts", 0) < 86400:
+                return data.get("names", [])
+        except Exception:
+            pass
+
+    url = "https://pypi.org/simple/"
+    headers = {"Accept": "application/vnd.pypi.simple.v1+json"}
+    resp = await asyncio.to_thread(requests.get, url, headers=headers, timeout=(5, 30))
+    resp.raise_for_status()
+    projects = resp.json().get("projects", [])
+    names = [p["name"] for p in projects]
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(json.dumps({"ts": _time.time(), "names": names}))
+
+    return names
+
+
+async def _search_pypi_index(query: str, limit: int = 10) -> list[tuple[str, str, str]]:
+    """Search PyPI index for packages matching query."""
+    names = await _fetch_pypi_index()
+    q = query.lower()
+
+    def _score(name: str) -> int:
+        n = name.lower()
+        if n == q:
+            return 0
+        if n.startswith(q):
+            return 1
+        if q in n:
+            return 2
+        return 99
+
+    matches = [n for n in names if q in n.lower()]
+    matches.sort(key=_score)
+    top = matches[:limit]
+
+    if not top:
+        return []
+
+    sem = asyncio.Semaphore(5)
+
+    async def _fetch_one(name: str) -> tuple[str, str, str]:
+        async with sem:
+            try:
+                url = f"https://pypi.org/pypi/{name}/json"
+                resp = await asyncio.to_thread(requests.get, url, timeout=(3.05, 8))
+                if resp.status_code == 200:
+                    info = resp.json().get("info", {})
+                    return (
+                        info.get("name", name),
+                        info.get("version", ""),
+                        info.get("summary", "")[:80],
+                    )
+            except Exception:
+                pass
+            return (name, "", "")
+
+    results = await asyncio.gather(*[_fetch_one(n) for n in top])
+    return list(results)
+
+
+# === Per-source Removal Helpers ===
+
+
 def _remove_from_requirements(path: Path, pkg_name: str) -> tuple[bool, str]:
     """Remove a package line from a ``requirements.txt``-style file."""
     if not path.is_file():
@@ -284,6 +395,42 @@ def _remove_from_pipfile(path: Path, pkg_name: str) -> tuple[bool, str]:
         return False, f"'{pkg_name}' not found in Pipfile"
     path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
     return True, f"Removed '{pkg_name}' from Pipfile"
+
+
+# === Environment Info Helpers ===
+
+
+def _get_python_version() -> str:
+    """Return the Python version string."""
+    import sys
+
+    return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+
+async def _get_uv_version(uv_path: str | None) -> str:
+    """Return the installed uv version string."""
+    if uv_path is None:
+        return "not found"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            uv_path,
+            "--version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode == 0:
+            text = stdout.decode().strip()
+            parts = text.split()
+            return parts[1] if len(parts) >= 2 else text
+    except Exception:
+        pass
+    return "not found"
+
+
+def _venv_exists() -> bool:
+    """Check if a .venv directory exists."""
+    return Path(".venv").is_dir()
 
 
 class PackageManager:
@@ -492,22 +639,98 @@ class PythonEcosystem(Ecosystem):
     async def validate_package(
         self, name: str, version: str | None = None
     ) -> tuple[bool, str, str]:
-        return False, "Not implemented", ""
+        """Validate package exists on PyPI."""
+        data = await _get_pypi_json(name)
+        if data is None:
+            return False, f"Package '{name}' not found on PyPI", ""
+        info = data.get("info", {})
+        latest = info.get("version", "")
+        if version:
+            releases = data.get("releases", {})
+            if version not in releases:
+                return False, f"Version {version} not found for '{name}'", latest
+        return True, "", latest
 
     async def fetch_latest_versions(self, names: list[str]) -> dict[str, str]:
-        return {}
+        """Fetch latest PyPI versions for packages."""
+        sem = asyncio.Semaphore(10)
+
+        async def _fetch_one(name: str) -> tuple[str, str]:
+            async with sem:
+                data = await _get_pypi_json(name)
+                if data is None:
+                    return name, ""
+                return name, data.get("info", {}).get("version", "")
+
+        results = await asyncio.gather(*[_fetch_one(n) for n in names])
+        return dict(results)
 
     async def search_registry(self, query: str) -> list[RegistryPackageInfo]:
-        return []
+        """Search PyPI for packages."""
+        results = await _search_pypi_index(query)
+        return [
+            RegistryPackageInfo(
+                name=name,
+                latest_version=version,
+                description=desc,
+            )
+            for name, version, desc in results
+        ]
 
     async def fetch_package_metadata(self, name: str) -> dict[str, str]:
-        return {}
+        """Fetch full package metadata from PyPI."""
+        data = await _get_pypi_json(name)
+        if data is None:
+            return {}
+        info = data.get("info", {})
+        return {
+            "name": info.get("name", ""),
+            "version": info.get("version", ""),
+            "description": info.get("summary", ""),
+            "license": info.get("license", ""),
+            "homepage": info.get("home_page", ""),
+            "author": info.get("author", ""),
+        }
 
     async def get_package_requires(self, name: str) -> list[str]:
+        """Get package dependencies via uv pip show."""
+        if self._pkg_mgr is None:
+            return []
+        try:
+            uv_path = self._pkg_mgr._uv
+            proc = await asyncio.create_subprocess_exec(
+                uv_path,
+                "pip",
+                "show",
+                name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode == 0:
+                for line in stdout.decode().splitlines():
+                    if line.startswith("Requires:"):
+                        reqs = line.split(":", 1)[1].strip()
+                        if reqs:
+                            return [r.strip() for r in reqs.split(",")]
+        except Exception:
+            pass
         return []
 
     async def get_env_info(self) -> EnvInfo:
-        return EnvInfo("Python", "", "uv", "", ".venv", False)
+        """Get environment information for Python ecosystem."""
+        python_ver = _get_python_version()
+        uv_ver = await _get_uv_version(self._pkg_mgr._uv if self._pkg_mgr else None)
+        venv_exists = _venv_exists()
+
+        return EnvInfo(
+            language_name="Python",
+            language_version=python_ver,
+            tool_name="uv",
+            tool_version=uv_ver,
+            env_label=".venv",
+            env_exists=venv_exists,
+        )
 
     def get_docs_url(self, name: str) -> str:
         return f"https://pypi.org/project/{name}/"

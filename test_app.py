@@ -1111,13 +1111,13 @@ async def test_init_modal_opens_no_toml(app_no_deps):
     async with app_no_deps.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
 
-        # The ConfirmModal should have been pushed automatically
-        confirm_dialog = app_no_deps.screen.query_one("#confirm-dialog")
+        # The InitProjectModal should have been pushed automatically
+        confirm_dialog = app_no_deps.screen.query_one("#init-dialog")
         assert confirm_dialog is not None
 
-        title = app_no_deps.screen.query_one("#confirm-title")
+        title = app_no_deps.screen.query_one("#init-title")
         rendered = str(title.render())
-        assert "Initialise" in rendered or "Init" in rendered
+        assert "Initialize" in rendered
 
 
 @pytest.mark.asyncio
@@ -1485,10 +1485,9 @@ async def test_outdated_check_with_mock(
     async def mock_fetch(packages):
         return {_normalise(n): "99.0.0" for n in packages}
 
-    monkeypatch.setattr("app._fetch_latest_versions", mock_fetch)
-
     async with app.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
+        monkeypatch.setattr(app._active_ecosystem, "fetch_latest_versions", mock_fetch)
         pkg_panel = app.query_one("#packages-panel")
         pkg_panel.focus()
         await pilot.pause()
@@ -1522,10 +1521,9 @@ async def test_outdated_status_panel_shows_count(
     async def mock_fetch(packages):
         return {_normalise(n): "99.0.0" for n in packages}
 
-    monkeypatch.setattr("app._fetch_latest_versions", mock_fetch)
-
     async with app.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
+        monkeypatch.setattr(app._active_ecosystem, "fetch_latest_versions", mock_fetch)
         await pilot.press("o")
         await pilot.pause()
         await pilot.pause()
@@ -1795,7 +1793,7 @@ async def test_sync_action(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     async with app.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        monkeypatch.setattr(app.pkg_mgr, "sync", mock_sync)
+        monkeypatch.setattr(app._active_ecosystem, "sync", mock_sync)
         await pilot.press("s")
         await pilot.pause()
         import asyncio
@@ -1820,7 +1818,7 @@ async def test_lock_action(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     async with app.run_test(size=(140, 30)) as pilot:
         await pilot.pause()
-        monkeypatch.setattr(app.pkg_mgr, "lock", mock_lock)
+        monkeypatch.setattr(app._active_ecosystem, "lock", mock_lock)
         await pilot.press("L")
         await pilot.pause()
         import asyncio

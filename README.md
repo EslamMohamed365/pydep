@@ -2,9 +2,9 @@
 
 <h1>PyDep</h1>
 
-<p><strong>A fully keyboard-driven terminal UI for Python dependency management</strong></p>
+<p><strong>A fully keyboard-driven terminal UI for multi-language dependency management</strong></p>
 
-<p><em>lazygit-style panels &nbsp;&middot;&nbsp; Vim keybindings &nbsp;&middot;&nbsp; Tokyo Night theme &nbsp;&middot;&nbsp; powered by uv</em></p>
+<p><em>Python, JavaScript & Go support &nbsp;&middot;&nbsp; lazygit-style panels &nbsp;&middot;&nbsp; Vim keybindings &nbsp;&middot;&nbsp; Tokyo Night theme</em></p>
 
 <br>
 
@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square&color=9ece6a)](LICENSE)
 [![uv](https://img.shields.io/badge/uv-powered-orange?style=flat-square&color=e0af68)](https://docs.astral.sh/uv/)
 [![Textual](https://img.shields.io/badge/built%20with-Textual-purple?style=flat-square&color=bb9af7)](https://textual.textualize.io/)
-[![Tests](https://img.shields.io/badge/tests-109%20passing-brightgreen?style=flat-square&color=9ece6a)](test_app.py)
+[![Tests](https://img.shields.io/badge/tests-123%20passing-brightgreen?style=flat-square&color=9ece6a)](test_app.py)
 
 <br>
 
@@ -24,15 +24,16 @@
 
 ## What is PyDep?
 
-PyDep scans your project for dependencies across **6 sources** &mdash; `pyproject.toml`, `requirements.txt`, `setup.py`, `setup.cfg`, `Pipfile`, and your virtual environment &mdash; and presents them in a unified, lazygit-inspired multi-panel interface.
+PyDep is a **multi-language dependency manager** that supports **Python** (`pyproject.toml`, `requirements.txt`, etc.), **JavaScript** (`package.json`), and **Go** (`go.mod`). It scans your project for dependencies across all sources and presents them in a unified, lazygit-inspired multi-panel interface.
 
 No mouse. No menus. Just your keyboard, Vim motions, and instant access to everything.
 
-**Why PyDep instead of running `uv` commands manually?**
+**Why PyDep instead of running package manager commands manually?**
 
 - **See everything at once** &mdash; all sources, versions, and outdated status in a single view
-- **Discover & install in seconds** &mdash; fuzzy-search PyPI, browse results with <kbd>j</kbd>/<kbd>k</kbd>, install without leaving the terminal
-- **Works with any project layout** &mdash; understands all 6 dependency formats simultaneously
+- **Discover & install in seconds** &mdash; fuzzy-search the registry, browse results with <kbd>j</kbd>/<kbd>k</kbd>, install without leaving the terminal
+- **Works with any project layout** &mdash; understands multiple dependency formats and languages simultaneously
+- **Switch languages instantly** &mdash; press <kbd>e</kbd> to cycle between Python, JavaScript, and Go
 
 ---
 
@@ -109,19 +110,21 @@ uv run python /path/to/pydep/app.py
 
 | Key | Action |
 |-----|--------|
+| <kbd>e</kbd> | Cycle to next ecosystem (Python → JavaScript → Go) |
+| <kbd>E</kbd> | Cycle to previous ecosystem |
 | <kbd>/</kbd> | Open filter bar |
 | <kbd>a</kbd> | Add a package |
-| <kbd>p</kbd> | Search PyPI |
+| <kbd>p</kbd> | Search registry |
 | <kbd>u</kbd> | Update selected package |
 | <kbd>d</kbd> | Delete selected package |
 | <kbd>o</kbd> | Check for outdated packages |
 | <kbd>U</kbd> | Update **all** outdated packages |
-| <kbd>s</kbd> | Sync &mdash; `uv sync` |
-| <kbd>L</kbd> | Lock &mdash; `uv lock` |
+| <kbd>s</kbd> | Sync dependencies |
+| <kbd>L</kbd> | Lock dependencies |
 | <kbd>D</kbd> | Open package docs in browser |
 | <kbd>r</kbd> | Refresh package list |
 | <kbd>v</kbd> | Create virtual environment |
-| <kbd>i</kbd> | Initialize project &mdash; `uv init --bare` |
+| <kbd>i</kbd> | Initialize project |
 | <kbd>?</kbd> | Toggle help overlay |
 | <kbd>q</kbd> | Quit |
 
@@ -153,7 +156,22 @@ uv run python /path/to/pydep/app.py
 
 ## Architecture
 
-PyDep is a **single-file application** &mdash; no package structure, no `src/` layout. The entire TUI, all parsers, and all uv integration live in `app.py`.
+PyDep uses an **Ecosystem Adapter pattern** to support multiple programming languages. The architecture consists of:
+
+- **`app.py`** &mdash; The TUI layer (panels, modals, keybindings)
+- **`base.py`** &mdash; Abstract `Ecosystem` interface and data structures
+- **`ecosystems/`** &mdash; Language-specific implementations:
+  - `python.py` &mdash; Python/uv/PyPI
+  - `javascript.py` &mdash; JavaScript/npm/npmjs.org
+  - `go.py` &mdash; Go/goproxy.org
+
+### Supported Languages
+
+| Language | Package Manager | Registry | Files Scanned |
+|----------|---------------|----------|---------------|
+| **Python** | uv | PyPI | `pyproject.toml`, `requirements.txt`, `setup.py`, `setup.cfg`, `Pipfile`, `uv.lock` |
+| **JavaScript** | npm | npmjs.org | `package.json`, `package-lock.json`, `node_modules` |
+| **Go** | go mod | proxy.golang.org | `go.mod`, `go.sum` |
 
 ### Layout
 

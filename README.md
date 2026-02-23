@@ -62,6 +62,38 @@ uv run python /path/to/pydep/app.py
 
 > **Note:** Run `app.py` from the directory containing your dependency files (`pyproject.toml`, `requirements.txt`, etc.). If no `pyproject.toml` exists, PyDep will offer to run `uv init --bare` for you.
 
+### Debian/Ubuntu
+
+```bash
+# Download release
+curl -L -o pydep_0.1.0_amd64.deb https://github.com/EslamMohamed365/pydep/releases/download/v0.1.0/pydep_0.1.0_amd64.deb
+
+# Install
+sudo dpkg -i pydep_0.1.0_amd64.deb
+```
+
+### Fedora
+
+```bash
+# Download release
+curl -L -o pydep-0.1.0-1.x86_64.rpm https://github.com/EslamMohamed365/pydep/releases/download/v0.1.0/pydep-0.1.0-1.x86_64.rpm
+
+# Install
+sudo dnf install pydep-0.1.0-1.x86_64.rpm
+```
+
+### Arch Linux
+
+```bash
+# Install from AUR
+yay -S pydep
+
+# Or manual build from PKGBUILD
+git clone https://github.com/EslamMohamed365/pydep.git
+cd pydep/packaging/arch
+makepkg -si
+```
+
 ---
 
 ## Usage

@@ -1,0 +1,10 @@
+Package: pydep
+Version: 0.1.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: bash (>= 4.0)
+Maintainer: Eslam Mohamed <eslam@example.com>
+Description: Multi-language dependency manager TUI
+ A fully keyboard-driven terminal UI for managing
+ Python, JavaScript, and Go dependencies.

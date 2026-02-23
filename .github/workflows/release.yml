@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: |
+          pip install pyinstaller>=6.0 requests textual
+
+      - name: Build executable
+        run: |
+          pyinstaller pyinstaller.spec --noconfirm
+          ls -la dist/
+
+      - name: Build Debian package
+        run: |
+          mkdir -p packaging/debian/usr/bin
+          cp dist/pydep packaging/debian/usr/bin/
+          chmod +x packaging/debian/usr/bin/pydep
+          dpkg-deb --build packaging/debian dist/pydep_${GITHUB_REF_NAME}_amd64.deb
+
+      - name: Build RPM package
+        run: |
+          pip install rpm
+          mkdir -p ~/rpmbuild/SPECS ~/rpmbuild/SOURCES
+          cp packaging/fedora/pydep.spec ~/rpmbuild/SPECS/
+          cp dist/pydep ~/rpmbuild/SOURCES/
+          rpmbuild -bb ~/rpmbuild/SPECS/pydep.spec
+          cp ~/rpmbuild/RPMS/x86_64/pydep-*.rpm dist/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/pydep
+            dist/*.deb
+            dist/*.rpm
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

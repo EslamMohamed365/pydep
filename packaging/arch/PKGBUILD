@@ -1,0 +1,15 @@
+# Maintainer: Eslam Mohamed <eslam@example.com>
+pkgname=pydep
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Multi-language dependency manager TUI"
+arch=('x86_64')
+url="https://github.com/EslamMohamed365/pydep"
+license=('MIT')
+depends=('bash')
+source=("pydep::file:///home/eslam/coding/projects/pydep/dist/pydep")
+sha256sums=('SKIP')
+
+package() {
+  install -Dm755 "$srcdir/pydep" "$pkgdir/usr/bin/pydep"
+}
